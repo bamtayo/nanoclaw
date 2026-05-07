@@ -11,6 +11,11 @@
 
 set -e
 
+# Symlink gmail credentials to home dir so gmail-mcp's fallback path works.
+# The mount lands at /workspace/extra/.gmail-mcp; ~/.gmail-mcp is where the
+# server looks when GMAIL_OAUTH_PATH / GMAIL_CREDENTIALS_PATH aren't set.
+[ -d /workspace/extra/.gmail-mcp ] && ln -sfn /workspace/extra/.gmail-mcp ~/.gmail-mcp
+
 cat > /tmp/input.json
 
 exec bun run /app/src/index.ts < /tmp/input.json

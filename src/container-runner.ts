@@ -461,12 +461,21 @@ async function buildContainerArgs(
   }
   log.info('OneCLI gateway applied', { containerName });
 
-  // If using Claude.ai OAuth subscription, inject the token and clear the
-  // OneCLI placeholder so Claude Code uses OAuth rather than the API key path.
-  const { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
-  if (oauthToken) {
-    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
+  // Copy current host credentials into the per-group .claude-shared dir
+  // (already mounted at /home/node/.claude) so Claude Code can authenticate
+  // and refresh its own token without a manually-rotated .env entry.
+  // ANTHROPIC_API_KEY is cleared so OneCLI's placeholder doesn't win.
+  const hostCredentials = path.join(process.env.HOME ?? '/root', '.claude', '.credentials.json');
+  const agentClaudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
+  if (fs.existsSync(hostCredentials)) {
+    fs.copyFileSync(hostCredentials, path.join(agentClaudeDir, '.credentials.json'));
     args.push('-e', 'ANTHROPIC_API_KEY=');
+  } else {
+    const { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
+    if (oauthToken) {
+      args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
+      args.push('-e', 'ANTHROPIC_API_KEY=');
+    }
   }
 
   // Host gateway
