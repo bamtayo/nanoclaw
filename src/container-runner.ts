@@ -20,6 +20,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
+import { readEnvFile } from './env.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -459,6 +460,14 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // If using Claude.ai OAuth subscription, inject the token and clear the
+  // OneCLI placeholder so Claude Code uses OAuth rather than the API key path.
+  const { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
+  if (oauthToken) {
+    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
+    args.push('-e', 'ANTHROPIC_API_KEY=');
+  }
 
   // Host gateway
   args.push(...hostGatewayArgs());
