@@ -1,3 +1,12 @@
-{
-  "mcpServers": {}
+json{
+  "mcpServers": {
+    "gmail": {
+      "command": "npx",
+      "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+      "env": {
+        "GMAIL_CREDENTIALS_PATH": "/home/zion/.gmail-mcp/credentials.json",
+        "GMAIL_OAUTH_PATH": "/home/zion/.gmail-mcp/gcp-oauth.keys.json"
+      }
+    }
+  }
 }

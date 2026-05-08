@@ -464,12 +464,25 @@ async function buildContainerArgs(
   // Copy current host credentials into the per-group .claude-shared dir
   // (already mounted at /home/node/.claude) so Claude Code can authenticate
   // and refresh its own token without a manually-rotated .env entry.
+  // The file is written with both key names (claudeAiOauth + claudeAiOauthToken)
+  // so it works with container Claude Code versions that use either schema.
   // ANTHROPIC_API_KEY is cleared so OneCLI's placeholder doesn't win.
+  // NO_PROXY excludes Anthropic/Claude endpoints so the token refresh call
+  // bypasses the OneCLI proxy (which can't inject credentials for these domains).
   const hostCredentials = path.join(process.env.HOME ?? '/root', '.claude', '.credentials.json');
   const agentClaudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
   if (fs.existsSync(hostCredentials)) {
-    fs.copyFileSync(hostCredentials, path.join(agentClaudeDir, '.credentials.json'));
+    const raw = JSON.parse(fs.readFileSync(hostCredentials, 'utf8'));
+    const tokenData = raw.claudeAiOauth ?? raw.claudeAiOauthToken;
+    if (tokenData) {
+      const normalized = { claudeAiOauth: tokenData, claudeAiOauthToken: tokenData };
+      fs.writeFileSync(path.join(agentClaudeDir, '.credentials.json'), JSON.stringify(normalized));
+    } else {
+      fs.copyFileSync(hostCredentials, path.join(agentClaudeDir, '.credentials.json'));
+    }
     args.push('-e', 'ANTHROPIC_API_KEY=');
+    args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com');
+    args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com');
   } else {
     const { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
     if (oauthToken) {

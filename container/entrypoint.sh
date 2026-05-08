@@ -16,6 +16,13 @@ set -e
 # server looks when GMAIL_OAUTH_PATH / GMAIL_CREDENTIALS_PATH aren't set.
 [ -d /workspace/extra/.gmail-mcp ] && ln -sfn /workspace/extra/.gmail-mcp ~/.gmail-mcp
 
+# Symlink gdrive tokens to the default XDG config path that mcp-google-drive
+# falls back to when GOOGLE_TOKEN_PATH env var isn't propagated by the SDK.
+if [ -d /workspace/extra/.gdrive-mcp ]; then
+  mkdir -p ~/.config/mcp-google-drive
+  ln -sfn /workspace/extra/.gdrive-mcp/tokens.json ~/.config/mcp-google-drive/tokens.json
+fi
+
 cat > /tmp/input.json
 
 exec bun run /app/src/index.ts < /tmp/input.json
