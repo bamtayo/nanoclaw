@@ -473,7 +473,25 @@ async function buildContainerArgs(
   const agentClaudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
   if (fs.existsSync(hostCredentials)) {
     const raw = JSON.parse(fs.readFileSync(hostCredentials, 'utf8'));
-    const tokenData = raw.claudeAiOauth ?? raw.claudeAiOauthToken;
+    let tokenData = raw.claudeAiOauth ?? raw.claudeAiOauthToken;
+    if (tokenData?.refreshToken && tokenData?.expiresAt && tokenData.expiresAt < Date.now()) {
+      try {
+        const res = await fetch('https://platform.claude.com/v1/oauth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: tokenData.refreshToken }),
+        });
+        if (res.ok) {
+          const refreshed = await res.json() as Record<string, unknown>;
+          tokenData = { ...tokenData, ...refreshed };
+          const updated = { claudeAiOauth: tokenData, claudeAiOauthToken: tokenData };
+          fs.writeFileSync(hostCredentials, JSON.stringify(updated));
+          log.info('Refreshed Claude OAuth token before container spawn');
+        }
+      } catch (e) {
+        log.warn('Token refresh failed, proceeding with existing credentials', { error: String(e) });
+      }
+    }
     if (tokenData) {
       const normalized = { claudeAiOauth: tokenData, claudeAiOauthToken: tokenData };
       fs.writeFileSync(path.join(agentClaudeDir, '.credentials.json'), JSON.stringify(normalized));
@@ -481,8 +499,8 @@ async function buildContainerArgs(
       fs.copyFileSync(hostCredentials, path.join(agentClaudeDir, '.credentials.json'));
     }
     args.push('-e', 'ANTHROPIC_API_KEY=');
-    args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com');
-    args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com');
+    args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
+    args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
   } else {
     const { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
     if (oauthToken) {
