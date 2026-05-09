@@ -31,6 +31,7 @@ import fs from 'fs';
 
 import { getActiveSessions } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { agentCredentialsNeedRefresh, syncAgentCredentials } from './credentials.js';
 import {
   countDueMessages,
   deleteOrphanProcessingClaims,
@@ -187,7 +188,16 @@ async function sweepSession(session: Session): Promise<void> {
 
     const alive = isContainerRunning(session.id);
 
-    // 3. Running-container SLA: absolute ceiling + per-claim stuck rules.
+    // 3a. Proactively refresh OAuth credentials for running containers.
+    // The .claude-shared dir is a bind mount, so the file update is visible
+    // to the container immediately without a restart.
+    if (alive && agentCredentialsNeedRefresh(agentGroup.id)) {
+      syncAgentCredentials(agentGroup.id).catch((e) =>
+        log.warn('Sweep credential refresh failed', { sessionId: session.id, error: String(e) }),
+      );
+    }
+
+    // 3c. Running-container SLA: absolute ceiling + per-claim stuck rules.
     if (alive && outDb) {
       enforceRunningContainerSla(inDb, outDb, session, agentGroup.id);
     }

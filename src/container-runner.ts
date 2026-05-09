@@ -20,6 +20,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
+import { syncAgentCredentials } from './credentials.js';
 import { readEnvFile } from './env.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
@@ -461,43 +462,14 @@ async function buildContainerArgs(
   }
   log.info('OneCLI gateway applied', { containerName });
 
-  // Copy current host credentials into the per-group .claude-shared dir
-  // (already mounted at /home/node/.claude) so Claude Code can authenticate
-  // and refresh its own token without a manually-rotated .env entry.
-  // The file is written with both key names (claudeAiOauth + claudeAiOauthToken)
-  // so it works with container Claude Code versions that use either schema.
-  // ANTHROPIC_API_KEY is cleared so OneCLI's placeholder doesn't win.
-  // NO_PROXY excludes Anthropic/Claude endpoints so the token refresh call
-  // bypasses the OneCLI proxy (which can't inject credentials for these domains).
-  const hostCredentials = path.join(process.env.HOME ?? '/root', '.claude', '.credentials.json');
-  const agentClaudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
-  if (fs.existsSync(hostCredentials)) {
-    const raw = JSON.parse(fs.readFileSync(hostCredentials, 'utf8'));
-    let tokenData = raw.claudeAiOauth ?? raw.claudeAiOauthToken;
-    if (tokenData?.refreshToken && tokenData?.expiresAt && tokenData.expiresAt < Date.now()) {
-      try {
-        const res = await fetch('https://platform.claude.com/v1/oauth/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: tokenData.refreshToken }),
-        });
-        if (res.ok) {
-          const refreshed = await res.json() as Record<string, unknown>;
-          tokenData = { ...tokenData, ...refreshed };
-          const updated = { claudeAiOauth: tokenData, claudeAiOauthToken: tokenData };
-          fs.writeFileSync(hostCredentials, JSON.stringify(updated));
-          log.info('Refreshed Claude OAuth token before container spawn');
-        }
-      } catch (e) {
-        log.warn('Token refresh failed, proceeding with existing credentials', { error: String(e) });
-      }
-    }
-    if (tokenData) {
-      const normalized = { claudeAiOauth: tokenData, claudeAiOauthToken: tokenData };
-      fs.writeFileSync(path.join(agentClaudeDir, '.credentials.json'), JSON.stringify(normalized));
-    } else {
-      fs.copyFileSync(hostCredentials, path.join(agentClaudeDir, '.credentials.json'));
-    }
+  // Sync fresh OAuth credentials into the per-group .claude-shared dir.
+  // The dir is bind-mounted at /home/node/.claude in the container, so writes
+  // are visible to a running container immediately — no restart needed for
+  // mid-session refreshes. ANTHROPIC_API_KEY is cleared so the OneCLI
+  // placeholder doesn't win. NO_PROXY lets Claude Code refresh its own token
+  // directly without going through the OneCLI proxy.
+  const credsSynced = await syncAgentCredentials(agentGroup.id);
+  if (credsSynced) {
     args.push('-e', 'ANTHROPIC_API_KEY=');
     args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
     args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
