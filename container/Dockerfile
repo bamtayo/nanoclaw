@@ -25,6 +25,7 @@ ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
 ARG GMAIL_MCP_VERSION=1.1.11
 ARG GDRIVE_MCP_VERSION=1.2.0
+ARG MS365_MCP_VERSION=0.107.1
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -125,6 +126,9 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
     mkdir -p "$GDRIVE_REAL/node_modules" && \
     ln -sfn "$GAXIOS_REAL" "$GDRIVE_REAL/node_modules/gaxios" && \
     echo "Linked $GDRIVE_REAL/node_modules/gaxios -> $GAXIOS_REAL"
+
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    pnpm install -g "@softeria/ms-365-mcp-server@${MS365_MCP_VERSION}"
 
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh
