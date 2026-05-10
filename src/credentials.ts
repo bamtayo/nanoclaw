@@ -7,7 +7,7 @@ import { log } from './log.js';
 const HOST_CREDENTIALS = path.join(process.env.HOME ?? '/root', '.claude', '.credentials.json');
 const REFRESH_URL = 'https://platform.claude.com/v1/oauth/token';
 // Refresh proactively when the token expires within this window.
-const REFRESH_WINDOW_MS = 30 * 60 * 1000;
+const REFRESH_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 function agentClaudeDir(agentGroupId: string): string {
   return path.join(DATA_DIR, 'v2-sessions', agentGroupId, '.claude-shared');

@@ -188,10 +188,10 @@ async function sweepSession(session: Session): Promise<void> {
 
     const alive = isContainerRunning(session.id);
 
-    // 3a. Proactively refresh OAuth credentials for running containers.
-    // The .claude-shared dir is a bind mount, so the file update is visible
-    // to the container immediately without a restart.
-    if (alive && agentCredentialsNeedRefresh(agentGroup.id)) {
+    // 3a. Proactively refresh OAuth credentials — always, not just when a
+    // container is alive. This ensures credentials are fresh before the next
+    // container spawn, preventing 401s after an idle period.
+    if (agentCredentialsNeedRefresh(agentGroup.id)) {
       syncAgentCredentials(agentGroup.id).catch((e) =>
         log.warn('Sweep credential refresh failed', { sessionId: session.id, error: String(e) }),
       );
