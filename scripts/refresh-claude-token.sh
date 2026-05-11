@@ -43,16 +43,24 @@ if [[ -z "$REFRESH_TOKEN" ]]; then
   exit 1
 fi
 
-RESPONSE=$(curl -sf -X POST "$REFRESH_URL" \
+RESPONSE=$(curl -s -X POST "$REFRESH_URL" \
   -H "Content-Type: application/json" \
-  -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"$REFRESH_TOKEN\"}" 2>/dev/null)
+  -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"$REFRESH_TOKEN\"}" 2>&1) || true
 
 if [[ -z "$RESPONSE" ]]; then
-  log "Refresh request failed — manual /login may be required"
+  log "Refresh request failed (no response) — manual /login may be required"
   exit 1
 fi
 
-python3 - "$CREDS" <<EOF
+# Check for error in response before trying to update credentials
+if echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'access_token' in d or 'accessToken' in d else 1)" 2>/dev/null; then
+  : # valid token response, proceed
+else
+  log "Refresh response was an error: $(echo "$RESPONSE" | head -c 200) — manual /login may be required"
+  exit 1
+fi
+
+python3 - "$CREDS" <<PYEOF || { log "Failed to write updated credentials"; exit 1; }
 import json, sys
 
 creds_path = sys.argv[1]
@@ -67,7 +75,7 @@ updated = {'claudeAiOauth': tok, 'claudeAiOauthToken': tok}
 
 with open(creds_path, 'w') as f:
     json.dump(updated, f)
-EOF
+PYEOF
 
 NEW_EXPIRES=$(python3 -c "
 import json
