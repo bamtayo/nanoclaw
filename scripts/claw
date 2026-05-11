@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# claw — send a prompt to your NanoClaw agent from the terminal
+# Talks to the running NanoClaw service via the CLI socket.
+set -euo pipefail
+
+NANOCLAW_DIR="${NANOCLAW_DIR:-/home/zion/nanoclaw}"
+
+if [[ $# -eq 0 ]]; then
+  echo "usage: claw <message...>" >&2
+  exit 1
+fi
+
+cd "$NANOCLAW_DIR"
+exec pnpm run --silent chat "$@"
