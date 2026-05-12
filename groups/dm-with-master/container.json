@@ -23,12 +23,20 @@
         "GOOGLE_CLIENT_SECRET_PATH": "/workspace/extra/.gmail-mcp/gcp-oauth.keys.json",
         "GOOGLE_TOKEN_PATH": "/workspace/extra/.gdrive-mcp/tokens.json"
       }
+    },
+    "gmail-work": {
+      "command": "/workspace/agent/start-gmail-mcp-work.sh",
+      "args": [],
+      "env": {}
     }
   },
   "packages": {
-    "apt": ["gcalcli"],
+    "apt": [
+      "gcalcli"
+    ],
     "npm": []
   },
+  "imageTag": "nanoclaw-agent-v2-d7220607:ag-1778157312942-nn81ob",
   "additionalMounts": [
     {
       "hostPath": "/home/zion/.gmail-mcp",
@@ -66,7 +74,6 @@
       "readonly": false
     }
   ],
-  "imageTag": "nanoclaw-agent-v2-d7220607:ag-1778157312942-nn81ob",
   "skills": "all",
   "groupName": "ZionTG01",
   "assistantName": "ZionTG01",

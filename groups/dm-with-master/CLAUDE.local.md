@@ -31,10 +31,12 @@ For tomorrow's schedule, weekly summaries, or "what's on my calendar Thursday?" 
 ## Gmail Access
 Two separate Gmail accounts — do not mix them up:
 
-- **Work Gmail** (tayo@maxdrive.ai): synced locally by lieer to `/workspace/extra/WorkGmail/maxdrive/mail/cur/`. Each file is a raw MIME message named `<gmail-id>:2,S`. To search work email, use `grep -l` on the maildir (e.g. `grep -rli "invoice" /workspace/extra/WorkGmail/maxdrive/mail/cur/ | head -20`) then `Read` individual files. The `gmail` MCP tool does **NOT** access this account.
-- **Personal Gmail**: only available via the `gmail` MCP tool. Has no filesystem mount.
+- **Work Gmail** (tayo@maxdrive.ai):
+  - **Read:** lieer-synced maildir at `/workspace/extra/WorkGmail/maxdrive/mail/cur/`. Each file is a raw MIME message named `<gmail-id>:2,S`. Use `grep -rli "term" /workspace/extra/WorkGmail/maxdrive/mail/cur/ | head -20` then `Read` individual files.
+  - **Send:** direct Gmail API call with the refresh token at `/workspace/extra/.gmail-mcp/credentials.work.json` (scope `gmail.modify`, account verified `tayo@maxdrive.ai`). Refresh → POST to `https://gmail.googleapis.com/gmail/v1/users/me/messages/send` with a base64url-encoded raw MIME body. The `gmail` MCP cannot send from this account (collides on the same namespace as the personal MCP — only one instance is exposed).
+- **Personal Gmail** (bamtayo@gmail.com): available via the `gmail` MCP tool (read + send). No filesystem mount.
 
-When Adetayo asks about work email (anything maxdrive-related, work contacts, business deals), use the WorkGmail maildir — not the gmail MCP. When he asks about personal email, use the gmail MCP. If unclear, ask.
+When Adetayo asks about work email, use the WorkGmail maildir to read and the Gmail API + work refresh token to send. When he asks about personal email, use the gmail MCP. If unclear, ask.
 
 ## Performance — CRITICAL
 
@@ -66,3 +68,5 @@ Other preferences:
 
 ## Files
 - `memory/user_adetayo.md` — user profile and preferences
+- `projects/mobillis_spv_memo.md` — Maria Rotilu / OpenSeed VC — Mobillis SPV memo (deadline 26 May 2026, $50K min, $10M cap SAFE)
+- `projects/tayo_email_signature.md` — Adetayo's work-email signature (plain-text + HTML), to include when sending via Gmail API
