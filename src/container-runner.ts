@@ -435,7 +435,16 @@ async function buildContainerArgs(
   providerContribution: ProviderContainerContribution,
   agentIdentifier?: string,
 ): Promise<string[]> {
-  const args: string[] = ['run', '--rm', '--name', containerName, '--label', CONTAINER_INSTALL_LABEL, '--memory=600m', '--memory-swap=1200m'];
+  const args: string[] = [
+    'run',
+    '--rm',
+    '--name',
+    containerName,
+    '--label',
+    CONTAINER_INSTALL_LABEL,
+    '--memory=600m',
+    '--memory-swap=1200m',
+  ];
 
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
