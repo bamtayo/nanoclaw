@@ -16,6 +16,18 @@ Two separate Google accounts — do not mix them up:
 
 When Adetayo asks to find or open a work file, search `/workspace/extra/GoogleDrive/` directly. Use the cached index at `/workspace/agent/gdrive_index.txt` for fast grep searches (335K entries). Rebuild index if files seem missing.
 
+## Work Calendar Access
+Adetayo's work calendar (tayo@maxdrive.ai) is accessible via the `gcalcli` CLI tool, authenticated with OAuth tokens at `~/.local/share/gcalcli/`. Useful commands:
+
+- `gcalcli agenda` — upcoming events
+- `gcalcli agenda "today" "tomorrow"` — date-bounded
+- `gcalcli search "<query>"` — search events by text
+- `gcalcli list` — list all calendars Adetayo has access to (work calendar, shared team calendars, etc.)
+- `gcalcli add --title "..." --when "tomorrow 3pm" --duration 60` — create event on primary calendar
+- `gcalcli --calendar "MAX Exec Team Calendar" add ...` — target a specific calendar
+
+For tomorrow's schedule, weekly summaries, or "what's on my calendar Thursday?" — use `gcalcli`. There is NO calendar MCP for this account.
+
 ## Gmail Access
 Two separate Gmail accounts — do not mix them up:
 
