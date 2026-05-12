@@ -31,16 +31,27 @@ TAG="${IMAGE_BASE}:${AGENT_GROUP_ID}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-cat > "$TMPDIR/Dockerfile" <<EOF
+cat > "$TMPDIR/Dockerfile" <<'EOF'
+ARG IMAGE_BASE
 FROM ${IMAGE_BASE}:latest
 USER root
 RUN apt-get update && apt-get install -y python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
 RUN pip install --break-system-packages gcalcli==4.5.1
 ENV XDG_DATA_HOME=/workspace/extra/.local/share
+
+# Patch @gongrzhe/server-gmail-autoauth-mcp so its hardcoded 'From: me'
+# becomes a template that reads from $GMAIL_FROM_HEADER (fallback 'me').
+# Lets the work-account gmail-work MCP show Adetayo's display name without
+# affecting the personal Gmail MCP. start-gmail-mcp-work.sh sets the env
+# var; personal MCP doesn't, so its behavior is unchanged.
+RUN GMAIL_UTL=$(readlink -f /pnpm/global/v11/7-19e0d729bae/node_modules/@gongrzhe/server-gmail-autoauth-mcp)/dist/utl.js && \
+    grep -q "'From: me'" "$GMAIL_UTL" && \
+    sed -i "s#'From: me'#\`From: \${process.env.GMAIL_FROM_HEADER || 'me'}\`#" "$GMAIL_UTL"
+
 USER node
 EOF
 
-docker build -t "$TAG" -f "$TMPDIR/Dockerfile" "$TMPDIR"
+docker build --build-arg "IMAGE_BASE=$IMAGE_BASE" -t "$TAG" -f "$TMPDIR/Dockerfile" "$TMPDIR"
 echo
 echo "Built: $TAG"
 echo "Now set this in groups/<folder>/container.json:"

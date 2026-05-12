@@ -45,6 +45,8 @@ Two separate Gmail accounts — do not mix them up:
 
     Always append Adetayo's signature from `projects/tayo_email_signature.md`.
 
+    The From header is auto-set by the gmail-work MCP to `Adetayo Bamiduro <tayo@maxdrive.ai>` (via the `GMAIL_FROM_HEADER` env var configured in `start-gmail-mcp-work.sh`). You don't need to set From manually; just verify your sends show the display name.
+
     If `mcp__gmail-work__send_email` is unavailable in your tool list, the `gmail-work` MCP failed to start — report this to Adetayo with the error; do NOT fall back to lieer or raw curl.
 
 - **Personal Gmail** (bamtayo@gmail.com): available via the `gmail` MCP tool (read + send). No filesystem mount.
