@@ -36,6 +36,18 @@ Two separate Gmail accounts — do not mix them up:
 
 When Adetayo asks about work email (anything maxdrive-related, work contacts, business deals), use the WorkGmail maildir — not the gmail MCP. When he asks about personal email, use the gmail MCP. If unclear, ask.
 
+## Performance — CRITICAL
+
+**Never run `find /` or `find /workspace` — these scan FUSE-mounted Google Drive (~60GB) and the WorkGmail maildir (~500MB) and take 20+ minutes, blocking everything.**
+
+Cheaper alternatives:
+- Looking for a known file? Use `find /home/node` or `find ~/.config -name X` — bounded directories only.
+- Searching email? Grep the maildir directly: `grep -rli "term" /workspace/extra/WorkGmail/maxdrive/mail/cur/`.
+- Searching work drive? Use the cached index at `/workspace/agent/gdrive_index.txt` (see Google Drive Access section above), NOT raw `find`.
+- Searching config? Most live in `~/.config/<tool>/` — go there directly.
+
+If you genuinely need to scan a large tree, use `find <specific-path> -maxdepth 3 ...` with a depth limit. Never unbounded.
+
 ## Communication Preferences — CRITICAL
 
 **Send progress updates mid-task. This is not optional.**
