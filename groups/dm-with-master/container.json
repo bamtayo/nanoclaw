@@ -1,0 +1,68 @@
+{
+  "mcpServers": {
+    "onedrive": {
+      "command": "/pnpm/bin/ms-365-mcp-server",
+      "args": [],
+      "env": {
+        "MS365_MCP_TOKEN_CACHE_PATH": "/workspace/extra/.ms365-mcp/.token-cache.json",
+        "MS365_MCP_SELECTED_ACCOUNT_PATH": "/workspace/extra/.ms365-mcp/.selected-account.json"
+      }
+    },
+    "gmail": {
+      "command": "/pnpm/bin/gmail-mcp",
+      "args": [],
+      "env": {
+        "GMAIL_OAUTH_PATH": "/workspace/extra/.gmail-mcp/gcp-oauth.keys.json",
+        "GMAIL_CREDENTIALS_PATH": "/workspace/extra/.gmail-mcp/credentials.json"
+      }
+    },
+    "gdrive": {
+      "command": "/pnpm/bin/mcp-google-drive",
+      "args": [],
+      "env": {
+        "GOOGLE_CLIENT_SECRET_PATH": "/workspace/extra/.gmail-mcp/gcp-oauth.keys.json",
+        "GOOGLE_TOKEN_PATH": "/workspace/extra/.gdrive-mcp/tokens.json"
+      }
+    }
+  },
+  "packages": {
+    "apt": [],
+    "npm": []
+  },
+  "additionalMounts": [
+    {
+      "hostPath": "/home/zion/.gmail-mcp",
+      "containerPath": ".gmail-mcp",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.gdrive-mcp",
+      "containerPath": ".gdrive-mcp",
+      "readonly": false
+    },
+    {
+      "hostPath": "/mnt/c/Users/ZION/OneDrive/Documents",
+      "containerPath": "Documents",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.ms365-mcp",
+      "containerPath": ".ms365-mcp",
+      "readonly": false
+    },
+    {
+      "hostPath": "/mnt/g",
+      "containerPath": "GoogleDrive",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/mail",
+      "containerPath": "WorkGmail",
+      "readonly": true
+    }
+  ],
+  "skills": "all",
+  "groupName": "ZionTG01",
+  "assistantName": "ZionTG01",
+  "agentGroupId": "ag-1778157312942-nn81ob"
+}
