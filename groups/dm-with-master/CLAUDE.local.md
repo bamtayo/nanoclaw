@@ -33,10 +33,23 @@ Two separate Gmail accounts — do not mix them up:
 
 - **Work Gmail** (tayo@maxdrive.ai):
   - **Read:** lieer-synced maildir at `/workspace/extra/WorkGmail/maxdrive/mail/cur/`. Each file is a raw MIME message named `<gmail-id>:2,S`. Use `grep -rli "term" /workspace/extra/WorkGmail/maxdrive/mail/cur/ | head -20` then `Read` individual files.
-  - **Send:** direct Gmail API call with the refresh token at `/workspace/extra/.gmail-mcp/credentials.work.json` (scope `gmail.modify`, account verified `tayo@maxdrive.ai`). Refresh → POST to `https://gmail.googleapis.com/gmail/v1/users/me/messages/send` with a base64url-encoded raw MIME body. The `gmail` MCP cannot send from this account (collides on the same namespace as the personal MCP — only one instance is exposed).
+  - **Send:** ALWAYS use the **`mcp__gmail-work__send_email`** MCP tool. **Never** attempt to send work mail via `curl`, raw Gmail API calls, or lieer — lieer is read-only and the `gmail` MCP is wired to the personal account. The `gmail-work` MCP wraps `credentials.work.json` (scope `gmail.modify`, tayo@maxdrive.ai) and handles token refresh automatically.
+
+    **Replies** (response to an existing thread):
+    1. Read the original `.eml` from the maildir, extract `Message-ID` and `References` headers and the `threadId` (the maildir filename prefix is the Gmail message-id you can pass).
+    2. Call `mcp__gmail-work__send_email` with: `to`, `subject` prefixed `Re:`, `body`, plus `inReplyTo` and `threadId` so Gmail threads the conversation.
+
+    **Fresh sends** (new conversation, e.g. "send Yemi and Brian a note about X"):
+    1. Resolve recipient addresses — grep the maildir for past emails from/to "Yemi" or "Brian" to find their canonical addresses. If ambiguous, ask Adetayo.
+    2. Call `mcp__gmail-work__send_email` with `to`, `cc` (if any), `subject`, `body`. No `threadId` / `inReplyTo` needed.
+
+    Always append Adetayo's signature from `projects/tayo_email_signature.md`.
+
+    If `mcp__gmail-work__send_email` is unavailable in your tool list, the `gmail-work` MCP failed to start — report this to Adetayo with the error; do NOT fall back to lieer or raw curl.
+
 - **Personal Gmail** (bamtayo@gmail.com): available via the `gmail` MCP tool (read + send). No filesystem mount.
 
-When Adetayo asks about work email, use the WorkGmail maildir to read and the Gmail API + work refresh token to send. When he asks about personal email, use the gmail MCP. If unclear, ask.
+When Adetayo asks about work email, read from the WorkGmail maildir and send via `mcp__gmail-work__send_email`. When he asks about personal email, use the `gmail` MCP. If unclear, ask.
 
 ## Performance — CRITICAL
 
