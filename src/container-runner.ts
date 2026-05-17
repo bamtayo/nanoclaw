@@ -442,8 +442,8 @@ async function buildContainerArgs(
     containerName,
     '--label',
     CONTAINER_INSTALL_LABEL,
-    '--memory=600m',
-    '--memory-swap=1200m',
+    '--memory=900m',
+    '--memory-swap=1800m',
   ];
 
   // Environment — only vars read by code we don't own.
@@ -477,16 +477,24 @@ async function buildContainerArgs(
   // mid-session refreshes. ANTHROPIC_API_KEY is cleared so the OneCLI
   // placeholder doesn't win. NO_PROXY lets Claude Code refresh its own token
   // directly without going through the OneCLI proxy.
-  const credsSynced = await syncAgentCredentials(agentGroup.id);
-  if (credsSynced) {
+  // Prefer the long-lived OAuth token (oat_…) from .env or process.env when
+  // available — it doesn't expire and avoids the refresh_token rate-limit
+  // failures that plague the session-token-in-creds-file path. Fall back to
+  // the host's .credentials.json (subscription session token) only when no
+  // long-lived token is configured.
+  const oauthToken =
+    process.env.CLAUDE_CODE_OAUTH_TOKEN || readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']).CLAUDE_CODE_OAUTH_TOKEN;
+  if (oauthToken) {
+    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
     args.push('-e', 'ANTHROPIC_API_KEY=');
     args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
     args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
   } else {
-    const { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
-    if (oauthToken) {
-      args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
+    const credsSynced = await syncAgentCredentials(agentGroup.id);
+    if (credsSynced) {
       args.push('-e', 'ANTHROPIC_API_KEY=');
+      args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
+      args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
     }
   }
 
