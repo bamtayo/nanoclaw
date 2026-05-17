@@ -17,11 +17,19 @@
       }
     },
     "gdrive": {
-      "command": "/pnpm/bin/mcp-google-drive",
+      "command": "/pnpm/bin/google-drive-mcp",
       "args": [],
       "env": {
-        "GOOGLE_CLIENT_SECRET_PATH": "/workspace/extra/.gmail-mcp/gcp-oauth.keys.json",
-        "GOOGLE_TOKEN_PATH": "/workspace/extra/.gdrive-mcp/tokens.json"
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/workspace/extra/.gdrive-personal/gcp-oauth.keys.json",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/workspace/extra/.gdrive-personal/tokens.json"
+      }
+    },
+    "gdrive-work": {
+      "command": "/pnpm/bin/google-drive-mcp",
+      "args": [],
+      "env": {
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/workspace/extra/.gdrive-work/gcp-oauth.keys.json",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/workspace/extra/.gdrive-work/tokens.json"
       }
     },
     "gmail-work": {
@@ -44,8 +52,13 @@
       "readonly": false
     },
     {
-      "hostPath": "/home/zion/.gdrive-mcp",
-      "containerPath": ".gdrive-mcp",
+      "hostPath": "/home/zion/.config/google-drive-mcp",
+      "containerPath": ".gdrive-personal",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.config/google-drive-mcp-work",
+      "containerPath": ".gdrive-work",
       "readonly": false
     },
     {
