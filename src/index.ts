@@ -12,6 +12,7 @@ import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
+import { startCredentialsWatcher, stopCredentialsWatcher } from './credentials-watcher.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
@@ -163,6 +164,10 @@ async function main(): Promise<void> {
   startHostSweep();
   log.info('Host sweep started');
 
+  // 7. Start credentials watcher — push `/login` token rotations to running
+  // containers immediately, without waiting for the 60s sweep + 2h expiry window.
+  startCredentialsWatcher();
+
   log.info('NanoClaw running');
 }
 
@@ -178,6 +183,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
+  stopCredentialsWatcher();
   try {
     await teardownChannelAdapters();
   } finally {
