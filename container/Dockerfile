@@ -118,14 +118,19 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g \
         "@hachiai/mcp-google-drive@${GDRIVE_MCP_VERSION}" \
+        "@piotr-agier/google-drive-mcp" \
         "gaxios@6.7.1" && \
-    SHIM_TARGET=$(grep 'cmd-shim-target=' /pnpm/bin/mcp-google-drive | sed 's/.*cmd-shim-target=//') && \
-    INSTALL_NM=$(dirname "$(dirname "$(dirname "$(dirname "$SHIM_TARGET")")")") && \
-    GDRIVE_REAL=$(readlink -f "$INSTALL_NM/@hachiai/mcp-google-drive") && \
-    GAXIOS_REAL=$(readlink -f "$INSTALL_NM/gaxios") && \
-    mkdir -p "$GDRIVE_REAL/node_modules" && \
-    ln -sfn "$GAXIOS_REAL" "$GDRIVE_REAL/node_modules/gaxios" && \
-    echo "Linked $GDRIVE_REAL/node_modules/gaxios -> $GAXIOS_REAL"
+    # Locate the real gaxios install in the pnpm store (cohort-independent).
+    GAXIOS_REAL=$(find /pnpm/store -maxdepth 10 -path '*/gaxios/package.json' -not -path '*/node_modules/gaxios/node_modules/*' -print -quit | xargs dirname) && \
+    [ -n "$GAXIOS_REAL" ] && [ -d "$GAXIOS_REAL" ] && [ -f "$GAXIOS_REAL/package.json" ] && echo "gaxios real path: $GAXIOS_REAL" || (echo "FAILED to locate gaxios" && exit 1) && \
+    # Link gaxios into both google-drive MCP packages so ESM resolution works.
+    for SHIM_BIN in /pnpm/bin/mcp-google-drive /pnpm/bin/google-drive-mcp; do \
+        SHIM_TARGET=$(grep 'cmd-shim-target=' "$SHIM_BIN" | sed 's/.*cmd-shim-target=//') && \
+        PKG_REAL=$(readlink -f "$(dirname "$(dirname "$SHIM_TARGET")")") && \
+        mkdir -p "$PKG_REAL/node_modules" && \
+        ln -sfn "$GAXIOS_REAL" "$PKG_REAL/node_modules/gaxios" && \
+        echo "Linked $PKG_REAL/node_modules/gaxios -> $GAXIOS_REAL"; \
+    done
 
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@softeria/ms-365-mcp-server@${MS365_MCP_VERSION}"
