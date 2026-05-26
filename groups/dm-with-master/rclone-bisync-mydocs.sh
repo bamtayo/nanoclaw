@@ -44,7 +44,7 @@ telegram() {
 
 # Run the normal bisync. Capture combined output so we can grep for the
 # specific recovery signal without losing it from the log.
-OUT=$(/usr/bin/rclone bisync "$SRC" "$DST" --tpslimit 2 --tpslimit-burst 2 2>&1)
+OUT=$(/usr/bin/rclone bisync "$SRC" "$DST" --tpslimit 2 --tpslimit-burst 2 --drive-skip-dangling-shortcuts 2>&1)
 RC=$?
 
 printf '%s\n' "$OUT" >> "$LOG"
@@ -58,7 +58,7 @@ fi
 # blindly resyncing.
 if grep -qF 'Must run --resync to recover' <<<"$OUT"; then
   log "AUTO-RECOVER: bisync state lost, running --resync"
-  RESYNC_OUT=$(/usr/bin/rclone bisync "$SRC" "$DST" --resync --tpslimit 2 --tpslimit-burst 2 2>&1)
+  RESYNC_OUT=$(/usr/bin/rclone bisync "$SRC" "$DST" --resync --tpslimit 2 --tpslimit-burst 2 --drive-skip-dangling-shortcuts 2>&1)
   RC2=$?
   printf '%s\n' "$RESYNC_OUT" >> "$LOG"
   if (( RC2 == 0 )); then
