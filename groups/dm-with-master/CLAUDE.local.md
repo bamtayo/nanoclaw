@@ -93,3 +93,4 @@ Other preferences:
 - `memory/user_adetayo.md` — user profile and preferences
 - `projects/mobillis_spv_memo.md` — Maria Rotilu / OpenSeed VC — Mobillis SPV memo (deadline 26 May 2026, $50K min, $10M cap SAFE)
 - `projects/tayo_email_signature.md` — Adetayo's work-email signature (plain-text + HTML), to include when sending via Gmail API
+- `memory/reference_ai_agent_notes.md` — **AI Agent Notes** (Drive ID: 1jKfL7WMa9bK4eeKM9vN0b-Caga3vJtR1CerhpHrt-jY, path: My Drive/My Documents/Adetayo's Documents). Maps all key MAX report folders (mgmt, financial, ESG, fundraising, product, action trackers) + performance management instructions. Read before generating company reports.

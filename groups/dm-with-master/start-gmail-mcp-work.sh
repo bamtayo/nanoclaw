@@ -31,4 +31,8 @@ trap 'cp "$HOME/.gmail-mcp/credentials.json" /workspace/extra/.gmail-mcp/credent
 
 export GMAIL_FROM_HEADER='Adetayo Bamiduro <tayo@maxdrive.ai>'
 
-exec /pnpm/bin/gmail-mcp
+# NODE_PATH lets the patched file (outside the package directory) resolve
+# pnpm-hoisted dependencies like @modelcontextprotocol/sdk and googleapis.
+export NODE_PATH=/pnpm/global/v11/7-19e382188e0/node_modules/.pnpm/node_modules
+
+exec node /workspace/agent/gmail-mcp-patched.js
