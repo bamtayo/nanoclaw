@@ -31,6 +31,28 @@ TAG="${IMAGE_BASE}:${AGENT_GROUP_ID}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# Cc/Bcc patch script for @gongrzhe/server-gmail-autoauth-mcp v1.1.11.
+# v1.1.11's read_email handler omits Cc and Bcc from the returned text — patches
+# the dist/index.js to extract both headers and include them after To: in the
+# returned email summary. Idempotent (no-op if already patched).
+cat > "$TMPDIR/patch-gmail-cc.js" <<'EOF'
+const fs = require('fs');
+const p = process.argv[2];
+let s = fs.readFileSync(p, 'utf8');
+if (s.includes("const cc = headers.find")) { console.log('gmail-mcp already Cc-patched'); process.exit(0); }
+const findDate = "const date = headers.find(h => h.name?.toLowerCase() === 'date')?.value || '';";
+const addCcBcc = findDate + `
+                    const cc = headers.find(h => h.name?.toLowerCase() === 'cc')?.value || '';
+                    const bcc = headers.find(h => h.name?.toLowerCase() === 'bcc')?.value || '';`;
+const findText = 'Thread ID: ${threadId}\\nSubject: ${subject}\\nFrom: ${from}\\nTo: ${to}\\nDate: ${date}';
+const replText = 'Thread ID: ${threadId}\\nSubject: ${subject}\\nFrom: ${from}\\nTo: ${to}\\nCc: ${cc}\\nBcc: ${bcc}\\nDate: ${date}';
+if (!s.includes(findDate)) { console.error('Cc patch: date line not found, package layout changed?'); process.exit(1); }
+if (!s.includes(findText)) { console.error('Cc patch: text template not found, package layout changed?'); process.exit(1); }
+s = s.replace(findDate, addCcBcc).replace(findText, replText);
+fs.writeFileSync(p, s);
+console.log('gmail-mcp Cc-patched OK');
+EOF
+
 cat > "$TMPDIR/Dockerfile" <<'EOF'
 ARG IMAGE_BASE
 FROM ${IMAGE_BASE}:latest
@@ -47,6 +69,14 @@ ENV XDG_DATA_HOME=/workspace/extra/.local/share
 RUN GMAIL_UTL=$(readlink -f /pnpm/global/v11/7-19e0d729bae/node_modules/@gongrzhe/server-gmail-autoauth-mcp)/dist/utl.js && \
     grep -q "'From: me'" "$GMAIL_UTL" && \
     sed -i "s#'From: me'#\`From: \${process.env.GMAIL_FROM_HEADER || 'me'}\`#" "$GMAIL_UTL"
+
+# Patch read_email to also surface Cc/Bcc headers (v1.1.11 only returns
+# Subject/From/To/Date — Cc disappears from the agent's view of every email).
+# Path-glob find since the pnpm content-addressed hash drifts across rebuilds.
+COPY patch-gmail-cc.js /tmp/patch-gmail-cc.js
+RUN GMAIL_INDEX=$(find /pnpm/global -type f -path "*@gongrzhe/server-gmail-autoauth-mcp/dist/index.js" | head -1) && \
+    [ -n "$GMAIL_INDEX" ] && node /tmp/patch-gmail-cc.js "$GMAIL_INDEX" && \
+    rm /tmp/patch-gmail-cc.js
 
 USER node
 EOF
