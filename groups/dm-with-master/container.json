@@ -28,14 +28,22 @@
       "command": "/pnpm/bin/google-drive-mcp",
       "args": [],
       "env": {
-        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/workspace/extra/.gdrive-work/gcp-oauth.keys.json",
-        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/workspace/extra/.gdrive-work/tokens.json"
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/workspace/extra/.work-mcp-gdrive/gcp-oauth.keys.json",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/workspace/extra/.work-mcp-gdrive/tokens.json"
       }
     },
     "gmail-work": {
-      "command": "/workspace/agent/start-gmail-mcp-work.sh",
+      "command": "/workspace/agent/start-gmail-mcp-work-internal.sh",
       "args": [],
       "env": {}
+    },
+    "directory": {
+      "command": "node",
+      "args": ["/workspace/agent/directory-mcp.mjs"],
+      "env": {
+        "DIRECTORY_OAUTH_PATH": "/workspace/extra/.work-mcp-directory/gcp-oauth.keys.json",
+        "DIRECTORY_TOKEN_PATH": "/workspace/extra/.work-mcp-directory/token.json"
+      }
     }
   },
   "packages": {
@@ -84,6 +92,26 @@
     {
       "hostPath": "/home/zion/.local/share/gcalcli",
       "containerPath": ".local/share/gcalcli",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.config/zion-work-directory",
+      "containerPath": ".zion-work-directory",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.config/work-mcp-gmail",
+      "containerPath": ".work-mcp-gmail",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.config/work-mcp-gdrive",
+      "containerPath": ".work-mcp-gdrive",
+      "readonly": false
+    },
+    {
+      "hostPath": "/home/zion/.config/work-mcp-directory",
+      "containerPath": ".work-mcp-directory",
       "readonly": false
     }
   ],

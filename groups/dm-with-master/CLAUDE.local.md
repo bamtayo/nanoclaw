@@ -46,7 +46,7 @@ Two separate Gmail accounts — do not mix them up:
     2. Call `mcp__gmail-work__send_email` with: `to`, `subject` prefixed `Re:`, `body`, plus `inReplyTo` and `threadId` so Gmail threads the conversation.
 
     **Fresh sends** (new conversation, e.g. "send Yemi and Brian a note about X"):
-    1. Resolve recipient addresses — grep the maildir for past emails from/to "Yemi" or "Brian" to find their canonical addresses. If ambiguous, ask Adetayo.
+    1. Resolve recipient addresses — for **maxdrive.ai staff**, use the `directory` MCP tool `search_directory` (name → email via the Workspace directory; authoritative, covers all staff). For external/personal contacts, grep the maildir for past emails from/to that person to find their canonical address. If still ambiguous, ask Adetayo. Never guess at an address.
     2. Call `mcp__gmail-work__send_email` with `to`, `cc` (if any), `subject`, `body`. No `threadId` / `inReplyTo` needed.
 
     Always append Adetayo's signature from `projects/tayo_email_signature.md`.
@@ -93,4 +93,4 @@ Other preferences:
 - `memory/user_adetayo.md` — user profile and preferences
 - `projects/mobillis_spv_memo.md` — Maria Rotilu / OpenSeed VC — Mobillis SPV memo (deadline 26 May 2026, $50K min, $10M cap SAFE)
 - `projects/tayo_email_signature.md` — Adetayo's work-email signature (plain-text + HTML), to include when sending via Gmail API
-- `memory/reference_ai_agent_notes.md` — **AI Agent Notes** (Drive ID: 1jKfL7WMa9bK4eeKM9vN0b-Caga3vJtR1CerhpHrt-jY, path: My Drive/My Documents/Adetayo's Documents). Maps all key MAX report folders (mgmt, financial, ESG, fundraising, product, action trackers) + performance management instructions. Read before generating company reports.
+- `memory/reference_ai_agent_notes.md` — **AI Agent Notes** (Drive ID: 1jKfL7WMa9bK4eeKM9vN0b-Caga3vJtR1CerhpHrt-jY, path: My Drive/My Documents/Adetayo's Documents). Maps all key MAX report folders (mgmt, financial, ESG, fundraising, product, action trackers) + performance management instructions. **Read at the start of every work task.**
