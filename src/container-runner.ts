@@ -482,19 +482,27 @@ async function buildContainerArgs(
   // failures that plague the session-token-in-creds-file path. Fall back to
   // the host's .credentials.json (subscription session token) only when no
   // long-lived token is configured.
+  // NO_PROXY must preserve any provider-contributed entries (e.g. the opencode
+  // provider's 127.0.0.1,localhost for its local `opencode serve`) while still
+  // letting Claude Code reach Anthropic directly. A bare second `-e NO_PROXY=`
+  // would override the provider's (Docker keeps the last -e), so merge them.
+  // The claude provider contributes no NO_PROXY, so its behavior is unchanged.
+  const anthropicNoProxy = 'api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com';
+  const providerNoProxy = providerContribution.env?.NO_PROXY;
+  const mergedNoProxy = providerNoProxy ? `${providerNoProxy},${anthropicNoProxy}` : anthropicNoProxy;
   const oauthToken =
     process.env.CLAUDE_CODE_OAUTH_TOKEN || readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']).CLAUDE_CODE_OAUTH_TOKEN;
   if (oauthToken) {
     args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
     args.push('-e', 'ANTHROPIC_API_KEY=');
-    args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
-    args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
+    args.push('-e', `NO_PROXY=${mergedNoProxy}`);
+    args.push('-e', `no_proxy=${mergedNoProxy}`);
   } else {
     const credsSynced = await syncAgentCredentials(agentGroup.id);
     if (credsSynced) {
       args.push('-e', 'ANTHROPIC_API_KEY=');
-      args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
-      args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
+      args.push('-e', `NO_PROXY=${mergedNoProxy}`);
+      args.push('-e', `no_proxy=${mergedNoProxy}`);
     }
   }
 
