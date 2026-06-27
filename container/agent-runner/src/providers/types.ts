@@ -41,6 +41,13 @@ export interface QueryInput {
   cwd: string;
 
   /**
+   * Optional model override in `provider/modelID` form. The opencode provider
+   * passes it as a per-prompt model so the runtime can switch models without
+   * respawning. Providers that don't support per-prompt models ignore it.
+   */
+  model?: string;
+
+  /**
    * System context to inject. Providers translate this into whatever their
    * SDK expects (preset append, full system prompt, per-turn injection…).
    */

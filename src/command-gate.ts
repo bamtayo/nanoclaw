@@ -9,7 +9,11 @@
  */
 import { getDb, hasTable } from './db/connection.js';
 
-export type GateResult = { action: 'pass' } | { action: 'filter' } | { action: 'deny'; command: string };
+export type GateResult =
+  | { action: 'pass' }
+  | { action: 'filter' }
+  | { action: 'deny'; command: string }
+  | { action: 'model'; arg: string };
 
 const FILTERED_COMMANDS = new Set(['/help', '/login', '/logout', '/doctor', '/config', '/remote-control']);
 const ADMIN_COMMANDS = new Set(['/clear', '/compact', '/context', '/cost', '/files']);
@@ -34,6 +38,16 @@ export function gateCommand(content: string, userId: string | null, agentGroupId
   const command = text.split(/\s/)[0].toLowerCase();
 
   if (FILTERED_COMMANDS.has(command)) return { action: 'filter' };
+
+  // `/model` is admin-gated and handled entirely on the host (it switches the
+  // session's provider + model and respawns the container — see model-switch).
+  // It never reaches the container.
+  if (command === '/model') {
+    if (isAdmin(userId, agentGroupId)) {
+      return { action: 'model', arg: text.slice(command.length).trim() };
+    }
+    return { action: 'deny', command };
+  }
 
   if (ADMIN_COMMANDS.has(command)) {
     if (isAdmin(userId, agentGroupId)) {

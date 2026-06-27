@@ -279,9 +279,16 @@ export class ClaudeProvider implements AgentProvider {
 
     const instructions = input.systemContext?.instructions;
 
+    // The `/model` command selects opus/sonnet/haiku by writing a Claude Code
+    // model alias into active_model (no `/` — opencode's `provider/modelID`
+    // ids always contain one, so the guard keeps a stray opencode id from
+    // reaching the Claude SDK). undefined → Claude Code's plan default.
+    const model = input.model && !input.model.includes('/') ? input.model : undefined;
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
+        model,
         cwd: input.cwd,
         additionalDirectories: this.additionalDirectories,
         resume: input.continuation,

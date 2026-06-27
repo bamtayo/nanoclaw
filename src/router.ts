@@ -19,6 +19,7 @@
  */
 import { getChannelAdapter } from './channels/channel-registry.js';
 import { gateCommand } from './command-gate.js';
+import { handleModelCommand } from './model-switch.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { recordDroppedMessage } from './db/dropped-messages.js';
 import {
@@ -443,6 +444,14 @@ async function deliverToAgent(
         content: JSON.stringify({ text: `Permission denied: ${gate.command} requires admin access.` }),
       });
       log.info('Admin command denied by gate', { command: gate.command, userId, agentGroupId: agent.agent_group_id });
+      return;
+    }
+    if (gate.action === 'model') {
+      // `/model` is handled entirely on the host: it flips the session's
+      // provider (DeepSeek↔Claude), persists the model, stops the running
+      // container, and replies. The next message respawns on the new model.
+      handleModelCommand(session, deliveryAddr, gate.arg);
+      log.info('Model command handled', { sessionId: session.id, agentGroupId: agent.agent_group_id, arg: gate.arg });
       return;
     }
   }

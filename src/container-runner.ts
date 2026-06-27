@@ -450,6 +450,13 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Resolved provider (sessions.agent_provider > group > container.json). The
+  // runner reads container.json for the group default but cannot see the
+  // central DB's per-session override (set by `/model`), so pass it explicitly.
+  // Without this, a session switched to `claude` would still start the
+  // container.json provider (e.g. opencode) and run the wrong backend.
+  args.push('-e', `AGENT_PROVIDER=${provider}`);
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
@@ -482,19 +489,35 @@ async function buildContainerArgs(
   // failures that plague the session-token-in-creds-file path. Fall back to
   // the host's .credentials.json (subscription session token) only when no
   // long-lived token is configured.
+  // NO_PROXY must preserve any provider-contributed entries (e.g. the opencode
+  // provider's 127.0.0.1,localhost for its local `opencode serve`) while still
+  // letting Claude Code reach Anthropic directly. A bare second `-e NO_PROXY=`
+  // would override the provider's (Docker keeps the last -e), so merge them.
+  // The claude provider contributes no NO_PROXY, so its behavior is unchanged.
+  // Anthropic routes DIRECT (in NO_PROXY) for BOTH providers — the same path the
+  // `claude` provider has always used successfully on this network. The host
+  // reaches api.anthropic.com directly fine; routing opencode's Anthropic through
+  // the OneCLI proxy instead produced 502/ECONNRESET on egress. The `claude`
+  // provider's Claude Code refreshes its own OAuth token directly; the `opencode`
+  // provider's Anthropic uses the Claude Max subscription OAuth bearer from
+  // auth.json (host-written) — both go direct. DeepSeek still goes through the
+  // proxy for API-key injection (not in this list).
+  const anthropicNoProxy = 'api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com';
+  const providerNoProxy = providerContribution.env?.NO_PROXY;
+  const mergedNoProxy = [providerNoProxy, anthropicNoProxy].filter(Boolean).join(',');
   const oauthToken =
     process.env.CLAUDE_CODE_OAUTH_TOKEN || readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']).CLAUDE_CODE_OAUTH_TOKEN;
   if (oauthToken) {
     args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
     args.push('-e', 'ANTHROPIC_API_KEY=');
-    args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
-    args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
+    args.push('-e', `NO_PROXY=${mergedNoProxy}`);
+    args.push('-e', `no_proxy=${mergedNoProxy}`);
   } else {
     const credsSynced = await syncAgentCredentials(agentGroup.id);
     if (credsSynced) {
       args.push('-e', 'ANTHROPIC_API_KEY=');
-      args.push('-e', 'NO_PROXY=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
-      args.push('-e', 'no_proxy=api.anthropic.com,claude.ai,*.anthropic.com,platform.claude.com');
+      args.push('-e', `NO_PROXY=${mergedNoProxy}`);
+      args.push('-e', `no_proxy=${mergedNoProxy}`);
     }
   }
 

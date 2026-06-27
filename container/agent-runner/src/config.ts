@@ -37,7 +37,11 @@ export function loadConfig(): RunnerConfig {
   }
 
   _config = {
-    provider: (raw.provider as string) || 'claude',
+    // AGENT_PROVIDER (host-resolved: sessions.agent_provider > group >
+    // container.json) wins over the container.json default, so a per-session
+    // `/model` switch (DeepSeek↔Claude) selects the right provider. Falls back
+    // to container.json when unset (normal spawns).
+    provider: (process.env.AGENT_PROVIDER as string) || (raw.provider as string) || 'claude',
     assistantName: (raw.assistantName as string) || '',
     groupName: (raw.groupName as string) || '',
     agentGroupId: (raw.agentGroupId as string) || '',

@@ -77,3 +77,22 @@ export function setContinuation(providerName: string, id: string): void {
 export function clearContinuation(providerName: string): void {
   deleteValue(continuationKey(providerName));
 }
+
+const ACTIVE_MODEL_KEY = 'active_model';
+
+/**
+ * The opencode provider's active per-prompt model (`provider/modelID`), set by
+ * the `/model` command. Persisted so a model switch survives container
+ * respawns. undefined → fall back to the config default (OPENCODE_MODEL).
+ */
+export function getActiveModel(): string | undefined {
+  return getValue(ACTIVE_MODEL_KEY);
+}
+
+export function setActiveModel(model: string): void {
+  setValue(ACTIVE_MODEL_KEY, model);
+}
+
+export function clearActiveModel(): void {
+  deleteValue(ACTIVE_MODEL_KEY);
+}

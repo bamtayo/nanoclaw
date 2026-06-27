@@ -6,8 +6,11 @@ import {
   clearContinuation,
   migrateLegacyContinuation,
   setContinuation,
+  getActiveModel,
+  setActiveModel,
 } from './db/session-state.js';
-import { formatMessages, extractRouting, categorizeMessage, isClearCommand, isRunnerCommand, stripInternalTags, type RoutingContext } from './formatter.js';
+import { formatMessages, extractRouting, categorizeMessage, isClearCommand, isModelCommand, modelCommandArg, isRunnerCommand, stripInternalTags, type RoutingContext } from './formatter.js';
+import { resolvePreset, labelForModel, presetList } from './model-catalog.js';
 import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -56,6 +59,12 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   if (continuation) {
     log(`Resuming agent session ${continuation}`);
   }
+
+  // Active model for the opencode provider's per-prompt override. Set by the
+  // `/model` command (below), persisted in session_state so it survives
+  // container respawns. undefined → the config default (OPENCODE_MODEL).
+  let activeModel: string | undefined = getActiveModel();
+  if (activeModel) log(`Active model: ${activeModel}`);
 
   // Clear leftover 'processing' acks from a previous crashed container.
   // This lets the new container re-process those messages.
@@ -117,6 +126,34 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         commandIds.push(msg.id);
         continue;
       }
+      if ((msg.kind === 'chat' || msg.kind === 'chat-sdk') && isModelCommand(msg)) {
+        const arg = modelCommandArg(msg);
+        let text: string;
+        if (arg === '' || arg.toLowerCase() === 'status') {
+          const current = labelForModel(activeModel ?? process.env.OPENCODE_MODEL);
+          text = `Current model: ${current}\n\nAvailable:\n${presetList()}\n\nSwitch with /model <name>.`;
+        } else {
+          const preset = resolvePreset(arg);
+          if (!preset) {
+            text = `Unknown model "${arg}". Available:\n${presetList()}`;
+          } else {
+            activeModel = preset.model;
+            setActiveModel(preset.model);
+            log(`Model switched to ${preset.model}`);
+            text = `✅ Now using ${preset.label}.`;
+          }
+        }
+        writeMessageOut({
+          id: generateId(),
+          kind: 'chat',
+          platform_id: routing.platformId,
+          channel_type: routing.channelType,
+          thread_id: routing.threadId,
+          content: JSON.stringify({ text }),
+        });
+        commandIds.push(msg.id);
+        continue;
+      }
       normalMessages.push(msg);
     }
 
@@ -165,6 +202,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       continuation,
       cwd: config.cwd,
       systemContext: config.systemContext,
+      model: activeModel,
     });
 
     // Process the query while concurrently polling for new messages

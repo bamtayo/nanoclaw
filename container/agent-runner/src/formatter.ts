@@ -66,6 +66,18 @@ export function isClearCommand(msg: MessageInRow): boolean {
   return text.toLowerCase().startsWith('/clear');
 }
 
+/** True for `/model` and `/model <arg>` (runner-handled, opencode model switch). */
+export function isModelCommand(msg: MessageInRow): boolean {
+  const text = (parseContent(msg.content).text || '').trim().toLowerCase();
+  return text === '/model' || text.startsWith('/model ');
+}
+
+/** The argument after `/model` (e.g. "opus", "status", or "" for bare /model). */
+export function modelCommandArg(msg: MessageInRow): string {
+  const text = (parseContent(msg.content).text || '').trim();
+  return text.slice('/model'.length).trim();
+}
+
 /**
  * True for any chat that needs the outer loop's command path: /clear plus
  * admin/passthrough slash commands the SDK can only dispatch when they are
