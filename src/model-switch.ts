@@ -43,9 +43,13 @@ interface ModelTarget {
 const PRESETS: Record<string, ModelTarget> = {
   'deepseek-pro': { provider: 'opencode', activeModel: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
   'deepseek-flash': { provider: 'opencode', activeModel: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
-  opus: { provider: 'claude', activeModel: 'opus', label: 'Claude Opus 4.8' },
-  sonnet: { provider: 'claude', activeModel: 'sonnet', label: 'Claude Sonnet 4.6' },
-  haiku: { provider: 'claude', activeModel: 'haiku', label: 'Claude Haiku 4.5' },
+  // Use EXPLICIT model ids, not aliases: Claude Code 2.1.116's `opus` alias
+  // resolves to claude-opus-4-7 (the latest when that CLI shipped), so the
+  // alias would silently give 4.7. The explicit id `claude-opus-4-8` is served
+  // fine by the API (verified). Bump these when newer versions land.
+  opus: { provider: 'claude', activeModel: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+  sonnet: { provider: 'claude', activeModel: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  haiku: { provider: 'claude', activeModel: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
 };
 
 const ALIASES: Record<string, string> = {
