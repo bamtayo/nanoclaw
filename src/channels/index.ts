@@ -9,3 +9,4 @@
 import './cli.js';
 import './telegram.js';
 import './gchat.js';
+import './whatsapp.js';
