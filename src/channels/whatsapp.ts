@@ -272,6 +272,20 @@ registerChannelAdapter('whatsapp', {
       return jid;
     }
 
+    /**
+     * Group metadata for Baileys' `cachedGroupMetadata` hook — the participant
+     * list it encrypts sender-key distribution against when we send to a group.
+     *
+     * Participant IDs are returned EXACTLY as the server gave them. Do not
+     * translate @lid → @s.whatsapp.net here: modern groups are LID-addressed
+     * (sender-key and Signal session files on disk are keyed by LID), and
+     * rewriting participants to phone JIDs makes Baileys address the fan-out to
+     * identities the server won't accept for that group. The send then fails
+     * silently — sendMessage still resolves with a locally-generated key id, no
+     * exception is thrown, nothing is logged, and the message simply never
+     * reaches anyone. Inbound identity normalization is a separate concern and
+     * is handled by translateJid at the message-handling sites.
+     */
     async function getNormalizedGroupMetadata(jid: string): Promise<GroupMetadata | undefined> {
       if (!jid.endsWith('@g.us')) return undefined;
 
@@ -279,18 +293,11 @@ registerChannelAdapter('whatsapp', {
       if (cached && cached.expiresAt > Date.now()) return cached.metadata;
 
       const metadata = await sock.groupMetadata(jid);
-      const participants = await Promise.all(
-        metadata.participants.map(async (p) => ({
-          ...p,
-          id: await translateJid(p.id),
-        })),
-      );
-      const normalized = { ...metadata, participants };
       groupMetadataCache.set(jid, {
-        metadata: normalized,
+        metadata,
         expiresAt: Date.now() + GROUP_METADATA_CACHE_TTL_MS,
       });
-      return normalized;
+      return metadata;
     }
 
     async function syncGroupMetadata(force = false): Promise<void> {
