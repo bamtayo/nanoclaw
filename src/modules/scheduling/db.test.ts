@@ -16,7 +16,7 @@ import {
   pauseTask,
   resumeTask,
   updateTask,
-  getCompletedRecurring,
+  getRecurringToAdvance,
   type RecurringMessage,
 } from './db.js';
 
@@ -99,13 +99,63 @@ describe('cancelTask / pauseTask / resumeTask series matching', () => {
     db.close();
   });
 
-  it('cancelled task is not picked up by getCompletedRecurring', () => {
+  it('cancelled task is not picked up by getRecurringToAdvance', () => {
     const db = freshDb();
     insertBasicTask(db, 'task-1', '0 9 * * *');
     cancelTask(db, 'task-1');
 
-    const recurring = getCompletedRecurring(db);
+    const recurring = getRecurringToAdvance(db);
     expect(recurring).toHaveLength(0);
+    db.close();
+  });
+
+  // A recurring occurrence that exhausts MAX_TRIES must still roll the series
+  // forward — otherwise one outage silently deletes the routine.
+  it('failed recurring task is picked up by getRecurringToAdvance', () => {
+    const db = freshDb();
+    insertBasicTask(db, 'task-1', '0 9 * * *');
+    db.prepare(`UPDATE messages_in SET status='failed' WHERE id='task-1'`).run();
+
+    const recurring = getRecurringToAdvance(db);
+    expect(recurring.map((r) => r.id)).toEqual(['task-1']);
+    db.close();
+  });
+
+  it('failed one-off task is not picked up by getRecurringToAdvance', () => {
+    const db = freshDb();
+    insertBasicTask(db, 'task-1', null);
+    db.prepare(`UPDATE messages_in SET status='failed' WHERE id='task-1'`).run();
+
+    expect(getRecurringToAdvance(db)).toHaveLength(0);
+    db.close();
+  });
+
+  // recurrence='' is not NULL and parses as an every-minute cron — the clone
+  // bomb from 2026-07-15. Neither status may resurrect it.
+  it('empty-string recurrence is never advanced', () => {
+    const db = freshDb();
+    insertBasicTask(db, 'task-1', '');
+    insertBasicTask(db, 'task-2', '');
+    db.prepare(`UPDATE messages_in SET status='completed' WHERE id='task-1'`).run();
+    db.prepare(`UPDATE messages_in SET status='failed' WHERE id='task-2'`).run();
+
+    expect(getRecurringToAdvance(db)).toHaveLength(0);
+    db.close();
+  });
+
+  // Guards against double-scheduling when an occurrence was revived by hand.
+  it('failed task with a live sibling in the series is not advanced', () => {
+    const db = freshDb();
+    insertBasicTask(db, 'task-1', '0 9 * * *');
+    insertRecurrence(
+      db,
+      db.prepare(`SELECT * FROM messages_in WHERE id='task-1'`).get() as RecurringMessage,
+      'task-1-next',
+      new Date(Date.now() + 86_400_000).toISOString(),
+    );
+    db.prepare(`UPDATE messages_in SET status='failed' WHERE id='task-1'`).run();
+
+    expect(getRecurringToAdvance(db)).toHaveLength(0);
     db.close();
   });
 

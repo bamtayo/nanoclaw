@@ -1,10 +1,15 @@
 /**
  * Sweep hook for recurring tasks.
  *
- * Every sweep tick, find `messages_in` rows that are `completed` AND still
- * have a `recurrence` cron expression. For each, compute the next run via
- * cron-parser, insert a fresh pending row (copying series_id forward), then
- * clear the recurrence on the original so it isn't re-cloned next tick.
+ * Every sweep tick, find `messages_in` rows that are finished (`completed`,
+ * or `failed` after exhausting retries) AND still have a `recurrence` cron
+ * expression. For each, compute the next run via cron-parser, insert a fresh
+ * pending row (copying series_id forward), then clear the recurrence on the
+ * original so it isn't re-cloned next tick.
+ *
+ * A `failed` occurrence rolls forward like a completed one — the row keeps
+ * its `failed` status for forensics, but the series survives. See
+ * `getRecurringToAdvance` for why.
  *
  * Called from `src/host-sweep.ts` inside `MODULE-HOOK:scheduling-recurrence`.
  * When scheduling ships inline (current state through PR #7), the hook is a
@@ -16,10 +21,10 @@ import type Database from 'better-sqlite3';
 import { TIMEZONE } from '../../config.js';
 import { log } from '../../log.js';
 import type { Session } from '../../types.js';
-import { clearRecurrence, getCompletedRecurring, insertRecurrence } from './db.js';
+import { clearRecurrence, getRecurringToAdvance, insertRecurrence } from './db.js';
 
 export async function handleRecurrence(inDb: Database.Database, session: Session): Promise<void> {
-  const recurring = getCompletedRecurring(inDb);
+  const recurring = getRecurringToAdvance(inDb);
 
   for (const msg of recurring) {
     try {

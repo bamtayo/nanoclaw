@@ -119,9 +119,44 @@ export interface RecurringMessage {
   series_id: string;
 }
 
-export function getCompletedRecurring(db: Database.Database): RecurringMessage[] {
+/**
+ * Rows whose series should roll forward to its next occurrence.
+ *
+ * `failed` counts as well as `completed`. A recurring row reaches `failed`
+ * when host-sweep exhausts MAX_TRIES on it (container stalled mid-turn, box
+ * offline, network out) — and since only this query spawns the successor,
+ * treating `failed` as terminal silently deletes the whole series. One bad
+ * run must not end a routine: 2026-07-24 an outage killed 4 of Gabriel's
+ * report series and 13 of Zion's this way, with nothing logged but the
+ * per-message "marked as failed" warning.
+ *
+ * Guards:
+ * - `recurrence <> ''` — an empty string is not NULL, and
+ *   `CronExpressionParser.parse('')` yields an every-minute schedule, so a
+ *   hand-inserted `recurrence=''` row becomes a clone bomb (2026-07-15, ~352
+ *   clones). Insert NULL for one-offs; this is the backstop.
+ * - failed rows additionally require no live sibling in the series, so a
+ *   manually revived occurrence can't be double-scheduled.
+ */
+export function getRecurringToAdvance(db: Database.Database): RecurringMessage[] {
   return db
-    .prepare("SELECT * FROM messages_in WHERE status = 'completed' AND recurrence IS NOT NULL")
+    .prepare(
+      `SELECT * FROM messages_in m
+        WHERE m.recurrence IS NOT NULL
+          AND m.recurrence <> ''
+          AND (
+            m.status = 'completed'
+            OR (
+              m.status = 'failed'
+              AND NOT EXISTS (
+                SELECT 1 FROM messages_in s
+                 WHERE s.series_id = m.series_id
+                   AND s.id <> m.id
+                   AND s.status IN ('pending', 'paused')
+              )
+            )
+          )`,
+    )
     .all() as RecurringMessage[];
 }
 
