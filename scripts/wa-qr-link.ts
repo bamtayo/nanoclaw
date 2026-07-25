@@ -66,6 +66,41 @@ async function resolveWaWebVersion(): Promise<[number, number, number]> {
 
 let qrCount = 0;
 
+/**
+ * Stay connected after pairing until the history sync has written per-contact
+ * `tctoken-*` files into the auth dir, then report what landed.
+ *
+ * These tokens are what 1:1 sends attach to satisfy the server; without them
+ * every direct message is rejected with ack 463 while group sends still work.
+ * They arrive only with the post-pairing history sync, so the link is not
+ * actually usable for DMs until they show up on disk.
+ */
+async function waitForTcTokens(timeoutMs = 120_000): Promise<void> {
+  const started = Date.now();
+  let last = -1;
+  console.log('[link] linked — waiting for history sync to deliver tctokens...');
+  while (Date.now() - started < timeoutMs) {
+    const count = fs.existsSync(AUTH_DIR)
+      ? fs.readdirSync(AUTH_DIR).filter((f) => f.startsWith('tctoken-')).length
+      : 0;
+    if (count !== last) {
+      console.log(`[link] tctoken files: ${count} (${Math.round((Date.now() - started) / 1000)}s)`);
+      last = count;
+    }
+    // Tokens trickle in as the sync is processed; give it a quiet period to
+    // settle rather than exiting on the first file.
+    if (count > 0 && Date.now() - started > 45_000) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  const final = fs.readdirSync(AUTH_DIR).filter((f) => f.startsWith('tctoken-'));
+  console.log(`[link] RESULT: tctokens stored: ${final.length}`);
+  for (const f of final.slice(0, 20)) console.log(`  ${f}`);
+  if (final.length === 0) {
+    console.log('[link] WARNING: no tctokens — 1:1 sends will fail with ack 463. Group sends unaffected.');
+  }
+  process.exit(0);
+}
+
 async function connect(attempt = 1): Promise<void> {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const version = await resolveWaWebVersion();
@@ -77,6 +112,11 @@ async function connect(attempt = 1): Promise<void> {
     printQRInTerminal: false,
     logger,
     browser: Browsers.macOS('Chrome'),
+    // Pairing is the only moment WhatsApp sends a history sync, and that sync
+    // is the only source of the per-contact `tctoken`s that 1:1 sends require
+    // (see the syncFullHistory comment in src/channels/whatsapp.ts). Link
+    // without it and direct messages fail with ack 463 forever after.
+    syncFullHistory: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -106,7 +146,12 @@ async function connect(attempt = 1): Promise<void> {
           `<p>You can close this page.</p>`,
         false,
       );
-      setTimeout(() => process.exit(0), 1500);
+      // Do NOT exit here. The history sync lands seconds to tens of seconds
+      // after `open`, and it carries the `tctoken`s that 1:1 sends need.
+      // Exiting at 1.5s (as this did originally) kills the socket first, which
+      // is why every relink produced a session that could post to groups but
+      // silently failed every direct message with ack 463.
+      void waitForTcTokens();
       return;
     }
 

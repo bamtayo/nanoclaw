@@ -46,7 +46,13 @@ import { registerChannelAdapter } from './channel-registry.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
 import type { ChannelAdapter, ChannelSetup, ConversationInfo, InboundMessage, OutboundMessage } from './adapter.js';
 
-const baileysLogger = pino({ level: 'silent' });
+// `warn` by default, NOT silent. Server-side rejections ("received error in
+// ack", e.g. 463 missing-tctoken) log at warn — with the logger silenced, a
+// message the server threw away looks exactly like a delivered one, which on
+// 2026-07-25 hid every 1:1 failure for a full day. `debug` adds the protocol
+// layer (device enumeration, outgoing nodes) but is extremely verbose; use it
+// only while actively diagnosing.
+const baileysLogger = pino({ level: process.env.WA_LOG_LEVEL ?? 'warn' });
 
 /**
  * Fetch the latest WhatsApp Web version. Baileys' built-in
@@ -446,6 +452,14 @@ registerChannelAdapter('whatsapp', {
         printQRInTerminal: false,
         logger: baileysLogger,
         browser: Browsers.macOS('Chrome'),
+        // Required for 1:1 sends. WhatsApp rejects a direct message that
+        // carries no `tctoken` for the recipient with ack error 463
+        // ("missing tctoken for contact"), and Baileys only ever populates
+        // those tokens from a history sync (`storeTcTokensFromHistorySync`).
+        // Without this the sync payload is minimal, tokens are never stored,
+        // and every 1:1 fails silently while group sends — which don't need a
+        // token — keep working. Cost is a heavier sync right after pairing.
+        syncFullHistory: true,
         cachedGroupMetadata: async (jid: string) => getNormalizedGroupMetadata(jid),
         getMessage: async (key: WAMessageKey) => {
           // Check in-memory cache first (recently sent messages)
