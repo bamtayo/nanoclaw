@@ -380,8 +380,34 @@ registerChannelAdapter('whatsapp', {
       return results;
     }
 
-    async function sendRawMessage(jid: string, text: string): Promise<string | undefined> {
+    /**
+     * `noQueue` is for callers whose result is used as a delivery verdict.
+     *
+     * Silently queueing and returning `undefined` makes an offline send
+     * indistinguishable from a successful one: `delivery.ts` treats a resolved
+     * promise as success and calls `markDelivered`, so the row is retired and
+     * the log records "Message delivered" for a message that never left the
+     * host. On 2026-07-24 a 401 logout at 22:41 hid nine such sends this way —
+     * three Bible readings × (group + Gbemi) plus retries — all logged as
+     * delivered while the group received nothing.
+     *
+     * Throwing instead hands the message to the delivery layer's own retry
+     * (MAX_DELIVERY_ATTEMPTS, then a permanent-failure error log): the row
+     * stays undelivered and is re-attempted once the socket is back, which is
+     * what the queue was for. Queueing AND throwing would double-send, since
+     * the reconnect flush and the retry would both fire.
+     *
+     * Callers that aren't delivery verdicts (e.g. poll-vote notifications) keep
+     * the queue-and-continue behaviour — losing one of those to a blip is worse
+     * than the imprecise bookkeeping.
+     */
+    async function sendRawMessage(
+      jid: string,
+      text: string,
+      opts?: { noQueue?: boolean },
+    ): Promise<string | undefined> {
       if (!connected) {
+        if (opts?.noQueue) throw new Error('WhatsApp socket not connected');
         outgoingQueue.push({ jid, text });
         log.info('WA disconnected, message queued', { jid, queueSize: outgoingQueue.length });
         return;
@@ -397,6 +423,7 @@ registerChannelAdapter('whatsapp', {
         }
         return sent?.key?.id ?? undefined;
       } catch (err) {
+        if (opts?.noQueue) throw err;
         outgoingQueue.push({ jid, text });
         log.warn('Failed to send, message queued', { jid, err, queueSize: outgoingQueue.length });
         return undefined;
@@ -694,7 +721,7 @@ registerChannelAdapter('whatsapp', {
 
           const optionLines = options.map((o) => `  ${optionToCommand(o.label)}`).join('\n');
           const text = `*${title}*\n\n${question}\n\nReply with:\n${optionLines}`;
-          const msgId = await sendRawMessage(platformId, text);
+          const msgId = await sendRawMessage(platformId, text, { noQueue: true });
           if (msgId) {
             pendingQuestions.set(platformId, { questionId, options });
             if (pendingQuestions.size > PENDING_QUESTIONS_MAX) {
@@ -749,7 +776,7 @@ registerChannelAdapter('whatsapp', {
         if (text) {
           const formatted = formatWhatsApp(text);
           const prefixed = ASSISTANT_HAS_OWN_NUMBER ? formatted : `${ASSISTANT_NAME}: ${formatted}`;
-          return sendRawMessage(platformId, prefixed);
+          return sendRawMessage(platformId, prefixed, { noQueue: true });
         }
       },
 
