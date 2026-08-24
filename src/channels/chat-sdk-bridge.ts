@@ -352,8 +352,16 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
     async deliver(platformId: string, threadId: string | null, message): Promise<string | undefined> {
       // platformId is already in the adapter's encoded format (e.g. "telegram:6037840640",
-      // "discord:guildId:channelId") — use it directly as the thread ID
-      const tid = threadId ?? platformId;
+      // "discord:guildId:channelId") — use it directly as the thread ID.
+      //
+      // `??` only falls back on null/undefined, but scheduled-task rows store thread_id as an
+      // EMPTY STRING (11 of 31 live recurring tasks do). An empty string therefore sailed
+      // through as the thread id, and the gchat adapter's decodeThreadId('') splits to [''] —
+      // length 1, so it throws `ValidationError: Invalid Google Chat thread ID:` and the message
+      // is retried 3× then dropped. The agent never learns; the failure only reaches the error
+      // log. That silently discarded 27 messages, including the 2026-08-24 14:00 HQ Operations
+      // deck note. Treat blank/whitespace as absent, which is what "no thread" means.
+      const tid = threadId?.trim() ? threadId : platformId;
       const content = message.content as Record<string, unknown>;
 
       if (content.operation === 'edit' && content.messageId) {
@@ -492,7 +500,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     },
 
     async setTyping(platformId: string, threadId: string | null) {
-      const tid = threadId ?? platformId;
+      const tid = threadId?.trim() ? threadId : platformId;   // blank == no thread (see deliver)
       await adapter.startTyping(tid);
     },
 
