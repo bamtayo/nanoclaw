@@ -170,6 +170,19 @@ async function connect(attempt = 1): Promise<void> {
         writePage('<h2 style="color:#f87171">Logged out (401)</h2><p>Re-run the link script.</p>', false);
         process.exit(3);
       }
+      // 403 means the account is flagged/restricted. Retrying is what turns a flag into a ban —
+      // the 2026-07-31 incident was 440 reconnects in 26 minutes against an account under review.
+      // Stop dead and make a human look at it. Mirrors TERMINAL_DISCONNECT_REASONS in the adapter.
+      if (code === DisconnectReason.forbidden) {
+        console.log('[link] RESULT: forbidden (403) — account flagged; NOT retrying');
+        writePage(
+          '<h2 style="color:#f87171">Forbidden (403)</h2>' +
+            '<p>The account is flagged or restricted. Do not re-scan or re-run — ' +
+            'every retry is another data point against the number.</p>',
+          false,
+        );
+        process.exit(6);
+      }
       if (attempt < 8) {
         setTimeout(() => void connect(attempt + 1), 2000);
         return;

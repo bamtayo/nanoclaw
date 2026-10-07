@@ -10,6 +10,7 @@ import { deleteOrphanProcessingClaims, getProcessingClaims } from './db/session-
 import {
   ABSOLUTE_CEILING_MS,
   CLAIM_STUCK_MS,
+  STALL_MS,
   _resetStuckProcessingRowsForTesting,
   decideStuckAction,
   parseSqliteUtc,
@@ -151,6 +152,67 @@ describe('decideStuckAction', () => {
       claims: [{ message_id: 'x', status_changed: 'not-a-date' }],
     });
     expect(res.action).toBe('ok');
+  });
+
+  // Regression: before kill-stall existed, a container that claimed a message,
+  // emitted some events, then went silent mid-turn was invisible to the sweep.
+  // The claim check requires heartbeat <= claimedAt, which is false once any
+  // event fires, so only the 30-min ceiling could catch it. See 2026-07-10.
+  it('returns kill-stall when the container went silent mid-turn after making progress', () => {
+    expect(
+      decideStuckAction({
+        now: BASE,
+        // heartbeat is NEWER than the claim (progress was made) but stale by 12 min
+        heartbeatMtimeMs: BASE - 12 * 60_000,
+        containerState: null,
+        claims: [claim('m-stalled', 20 * 60_000)],
+      }),
+    ).toEqual({
+      action: 'kill-stall',
+      messageId: 'm-stalled',
+      heartbeatAgeMs: 12 * 60_000,
+      toleranceMs: STALL_MS,
+    });
+  });
+
+  // A healthy auto-compaction emits no SDK events for up to ~3 min on this
+  // deployment. It must never be mistaken for a stall.
+  it('does not kill during a normal-length compaction (3 min of silence)', () => {
+    expect(
+      decideStuckAction({
+        now: BASE,
+        heartbeatMtimeMs: BASE - 3 * 60_000,
+        containerState: null,
+        claims: [claim('m-compacting', 5 * 60_000)],
+      }),
+    ).toEqual({ action: 'ok' });
+  });
+
+  it('does not fire kill-stall when there is no claim in flight', () => {
+    expect(
+      decideStuckAction({
+        now: BASE,
+        heartbeatMtimeMs: BASE - 12 * 60_000,
+        containerState: null,
+        claims: [],
+      }),
+    ).toEqual({ action: 'ok' });
+  });
+
+  it('a long declared Bash timeout widens the stall window', () => {
+    expect(
+      decideStuckAction({
+        now: BASE,
+        heartbeatMtimeMs: BASE - 12 * 60_000,
+        containerState: {
+          current_tool: 'Bash',
+          tool_declared_timeout_ms: 20 * 60_000,
+          tool_started_at: new Date(BASE - 12 * 60_000).toISOString(),
+          updated_at: new Date(BASE - 12 * 60_000).toISOString(),
+        } as never,
+        claims: [claim('m-longbash', 20 * 60_000)],
+      }),
+    ).toEqual({ action: 'ok' });
   });
 });
 

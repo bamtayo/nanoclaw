@@ -105,6 +105,26 @@ export function markCompleted(ids: string[]): void {
   })();
 }
 
+/**
+ * Hand a message BACK for a later attempt instead of completing it.
+ *
+ * Used when the turn failed for a reason that another attempt could survive (see
+ * retryable.ts). The container cannot reschedule the row itself — inbound.db is
+ * host-owned — so it records the intent here and the host's `syncProcessingAcks`
+ * applies the backoff, leaves the row pending, and clears this ack so a later
+ * container can claim it again.
+ */
+export function markRetry(ids: string[]): void {
+  if (ids.length === 0) return;
+  const db = getOutboundDb();
+  const stmt = db.prepare(
+    "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'retry', datetime('now'))",
+  );
+  db.transaction(() => {
+    for (const id of ids) stmt.run(id);
+  })();
+}
+
 /** Mark a single message as failed — writes to processing_ack in outbound.db. */
 export function markFailed(id: string): void {
   getOutboundDb()

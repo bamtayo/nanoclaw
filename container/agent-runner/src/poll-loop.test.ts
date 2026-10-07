@@ -1,10 +1,40 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
-import { getPendingMessages, markCompleted } from './db/messages-in.js';
+import { getPendingMessages, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
+import { isContextOverflowResult, processQuery } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
+
+describe('isContextOverflowResult', () => {
+  // Must fire: these wedge a resumed session until a manual/nightly clear.
+  for (const text of [
+    'Prompt is too long',
+    'prompt is too long',
+    '  Prompt is too long', // leading whitespace from the SDK
+    'Input is too long',
+    'The request exceeds the maximum context length',
+  ]) {
+    it(`detects overflow: ${JSON.stringify(text)}`, () => {
+      expect(isContextOverflowResult(text)).toBe(true);
+    });
+  }
+
+  // Must NOT fire: a false positive would wipe a healthy session's continuity.
+  for (const text of [
+    null,
+    undefined,
+    '',
+    'Done — sent 13 emails.',
+    'The prompt is too long for a single tweet, so I split it.', // "too long" mid-sentence
+    'All 40 KPI requests are out.',
+  ]) {
+    it(`ignores non-overflow text: ${JSON.stringify(text)}`, () => {
+      expect(isContextOverflowResult(text)).toBe(false);
+    });
+  }
+});
 
 beforeEach(() => {
   initTestSessionDb();
@@ -244,5 +274,68 @@ describe('end-to-end with mock provider', () => {
     expect(outMessages).toHaveLength(1);
     expect(JSON.parse(outMessages[0].content).text).toBe('The answer is 4');
     expect(outMessages[0].in_reply_to).toBe('m1');
+  });
+});
+
+describe('scheduled-task isolation', () => {
+  it('a batch of only tasks is isolated; any chat in the batch is not', () => {
+    const tasksOnly = [
+      { kind: 'task' } as MessageInRow,
+      { kind: 'task' } as MessageInRow,
+    ];
+    const mixed = [{ kind: 'task' } as MessageInRow, { kind: 'chat' } as MessageInRow];
+    expect(tasksOnly.every((m) => m.kind === 'task')).toBe(true);
+    expect(mixed.every((m) => m.kind === 'task')).toBe(false);
+  });
+
+  it('isolated turn ends at the final result and does NOT absorb a second pending task', async () => {
+    const { markProcessing } = await import('./db/messages-in.js');
+
+    insertMessage('task-a', 'task', { prompt: 'Send summary A' });
+    insertMessage('task-b', 'task', { prompt: 'Send summary B' }); // would-be follow-up
+
+    const first = getPendingMessages().filter((m) => m.id === 'task-a');
+    const routing = extractRouting(first);
+    markProcessing(['task-a']);
+
+    // MockProvider yields one final result for the initial prompt, then would
+    // wait for pushes. With isolated=true, processQuery must end on that final
+    // result rather than pushing task-b in.
+    const provider = new MockProvider({}, () => 'Summary A sent.');
+    const query = provider.query({ prompt: formatMessages(first), cwd: '/tmp' });
+
+    // If isolation is broken this would hang; fail fast instead.
+    const result = await Promise.race([
+      processQuery(query, routing, ['task-a'], 'mock', true),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('processQuery did not end — isolation broken')), 2000)),
+    ]);
+
+    expect(result).toBeDefined();
+    // task-a completed…
+    const stillPending = getPendingMessages().map((m) => m.id);
+    expect(stillPending).not.toContain('task-a');
+    // …and task-b was NEVER pulled into this turn — it stays pending for its
+    // own fresh turn. This is the anti-stacking guarantee.
+    expect(stillPending).toContain('task-b');
+  });
+
+  it('an isolated task does NOT persist its session into the shared continuation', async () => {
+    const { markProcessing } = await import('./db/messages-in.js');
+    const { getContinuation, setContinuation } = await import('./db/session-state.js');
+
+    // Simulate an existing chat session that must survive an isolated task run.
+    setContinuation('mock', 'chat-session-keepme');
+
+    insertMessage('task-iso', 'task', { prompt: 'Run isolated' });
+    const batch = getPendingMessages().filter((m) => m.id === 'task-iso');
+    markProcessing(['task-iso']);
+
+    const provider = new MockProvider({}, () => 'ok');
+    const query = provider.query({ prompt: formatMessages(batch), cwd: '/tmp' });
+    await processQuery(query, extractRouting(batch), ['task-iso'], 'mock', true);
+
+    // The isolated task's fresh session id must NOT have overwritten the chat
+    // continuation — otherwise the next chat turn resumes a task transcript.
+    expect(getContinuation('mock')).toBe('chat-session-keepme');
   });
 });

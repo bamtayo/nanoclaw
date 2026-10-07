@@ -44,6 +44,7 @@
  *   - Approver has no reachable DM.
  *   - Delivery adapter missing.
  */
+import { DEFAULT_CHANNEL_AGENT } from '../../config.js';
 import { normalizeOptions, type NormalizedOption, type RawOption } from '../../channels/ask-question.js';
 import { createAgentGroup, getAgentGroup, getAgentGroupByFolder, getAllAgentGroups } from '../../db/agent-groups.js';
 import { getChannelAdapter } from '../../channels/channel-registry.js';
@@ -76,9 +77,38 @@ function toFolder(name: string): string {
 
 // ── Card builders ──
 
-function buildApprovalOptions(agentGroups: AgentGroup[]): RawOption[] {
+/**
+ * Resolve the configured default agent (DEFAULT_CHANNEL_AGENT) against the
+ * existing agent groups. Matches by id first (stable), then by name
+ * (case-insensitive). Returns undefined when unset or unresolvable, so the
+ * card falls back to legacy behavior.
+ */
+function resolveDefaultAgent(agentGroups: AgentGroup[]): AgentGroup | undefined {
+  if (!DEFAULT_CHANNEL_AGENT) return undefined;
+  return (
+    agentGroups.find((ag) => ag.id === DEFAULT_CHANNEL_AGENT) ??
+    agentGroups.find((ag) => ag.name.toLowerCase() === DEFAULT_CHANNEL_AGENT.toLowerCase())
+  );
+}
+
+function buildApprovalOptions(agentGroups: AgentGroup[], defaultAgent?: AgentGroup): RawOption[] {
   const options: RawOption[] = [];
-  if (agentGroups.length === 1) {
+  if (defaultAgent) {
+    // Configured default — lead with a one-tap connect to it, so the approver
+    // just confirms instead of picking. Other agents stay reachable below.
+    options.push({
+      label: `Connect to ${defaultAgent.name}`,
+      selectedLabel: `✅ Connected to ${defaultAgent.name}`,
+      value: `${CONNECT_PREFIX}${defaultAgent.id}`,
+    });
+    if (agentGroups.length > 1) {
+      options.push({
+        label: 'Choose a different agent',
+        selectedLabel: '📋 Choosing…',
+        value: CHOOSE_EXISTING_VALUE,
+      });
+    }
+  } else if (agentGroups.length === 1) {
     options.push({
       label: `Connect to ${agentGroups[0].name}`,
       selectedLabel: `✅ Connected to ${agentGroups[0].name}`,
@@ -194,7 +224,7 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
   const channelName = originMg?.name ?? null;
   const title = isGroup ? '📣 Bot mentioned in new channel' : '💬 New direct message';
   const question = buildQuestionText(isGroup, senderName, channelName, originChannelType);
-  const options = normalizeOptions(buildApprovalOptions(agentGroups));
+  const options = normalizeOptions(buildApprovalOptions(agentGroups, resolveDefaultAgent(agentGroups)));
 
   createPendingChannelApproval({
     messaging_group_id: messagingGroupId,

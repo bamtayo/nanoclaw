@@ -7,6 +7,7 @@
  */
 import Database from 'better-sqlite3';
 
+import { log } from '../log.js';
 import { INBOUND_SCHEMA, OUTBOUND_SCHEMA } from './schema.js';
 
 /** Apply the inbound or outbound schema to a DB file. Idempotent. */
@@ -153,19 +154,90 @@ export function getMessageForRetry(
     .get(messageId, status) as { id: string; tries: number; processAfter: string | null } | undefined;
 }
 
-export function syncProcessingAcks(inDb: Database.Database, outDb: Database.Database): void {
+/**
+ * Connectivity backoff, used when a container hands a turn back with a 'retry' ack.
+ *
+ * Deliberately much slower and much longer-lived than the stall ladder in
+ * host-sweep.ts (5s doubling, 5 tries — exhausted in two and a half minutes). That
+ * one recovers a wedged container, where failing fast is right. This one waits out
+ * an API or internet outage, which is measured in tens of minutes: the 2026-09-01
+ * outage that swallowed two reports ran for at least 45. Interval doubles from a
+ * minute, caps at ten, and gives up after ~2h15m — long enough to ride out an
+ * outage, short enough that a routine can never overlap its next occurrence.
+ */
+const CONNECTIVITY_BACKOFF_BASE_SEC = 60;
+const CONNECTIVITY_BACKOFF_CAP_SEC = 600;
+const CONNECTIVITY_MAX_TRIES = 16;
+
+export function connectivityBackoffSec(tries: number): number {
+  return Math.min(CONNECTIVITY_BACKOFF_BASE_SEC * Math.pow(2, tries), CONNECTIVITY_BACKOFF_CAP_SEC);
+}
+
+/**
+ * Sync container acks into messages_in.
+ *
+ * Returns the message ids whose 'retry' acks still need clearing. The host opens
+ * outbound.db read-only (the container owns the file), so when we are handed a
+ * read-only handle we cannot delete them here — the caller must clear them through
+ * a short-lived writable handle. Deleting through a read-only handle throws
+ * SQLITE_READONLY, which on 2026-09-09 aborted the whole sweep loop every tick and
+ * silently froze an agent's recurrence fanout for 33h.
+ */
+export function syncProcessingAcks(inDb: Database.Database, outDb: Database.Database): string[] {
   const completed = outDb
     .prepare("SELECT message_id FROM processing_ack WHERE status IN ('completed', 'failed')")
     .all() as Array<{ message_id: string }>;
 
-  if (completed.length === 0) return;
+  // Turns the container could not run at all (see container retryable.ts). These must
+  // NOT become 'completed': a completed row with a recurrence is advanced by
+  // handleRecurrence and the occurrence is lost. Reschedule and leave it pending.
+  const retrying = outDb
+    .prepare("SELECT message_id FROM processing_ack WHERE status = 'retry'")
+    .all() as Array<{ message_id: string }>;
+
+  if (completed.length === 0 && retrying.length === 0) return [];
 
   const updateStmt = inDb.prepare("UPDATE messages_in SET status = 'completed' WHERE id = ? AND status != 'completed'");
   inDb.transaction(() => {
     for (const { message_id } of completed) {
       updateStmt.run(message_id);
     }
+    for (const { message_id } of retrying) {
+      const msg = getMessageForRetry(inDb, message_id, 'pending');
+      // Gone or no longer pending (cancelled, superseded) — nothing to reschedule.
+      if (!msg) continue;
+      if (msg.tries >= CONNECTIVITY_MAX_TRIES) {
+        // Out of road. 'failed' rather than 'completed' keeps the miss on the record;
+        // handleRecurrence still advances the series, so the schedule survives.
+        markMessageFailed(inDb, msg.id);
+        log.warn('Message failed after exhausting connectivity retries', {
+          messageId: msg.id,
+          tries: msg.tries,
+        });
+      } else {
+        const backoffSec = connectivityBackoffSec(msg.tries);
+        retryWithBackoff(inDb, msg.id, backoffSec);
+        log.info('Turn could not reach the API — rescheduled', {
+          messageId: msg.id,
+          tries: msg.tries,
+          backoffSec,
+        });
+      }
+    }
   })();
+
+  // Clear the retry acks: the container skips any message that has ANY processing_ack
+  // row, so leaving these behind would make the reschedule unreachable.
+  if (retrying.length > 0) {
+    const ids = retrying.map((r) => r.message_id);
+    if (outDb.readonly) return ids;
+    const del = outDb.prepare('DELETE FROM processing_ack WHERE message_id = ? AND status = ?');
+    outDb.transaction(() => {
+      for (const message_id of ids) del.run(message_id, 'retry');
+    })();
+  }
+
+  return [];
 }
 
 export function getStuckProcessingIds(outDb: Database.Database): string[] {

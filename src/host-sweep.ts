@@ -67,12 +67,25 @@ export const ABSOLUTE_CEILING_MS = 30 * 60 * 1000;
 // Stuck tolerance window applied per 'processing' claim — "did we see any
 // signs of life since this message was claimed?"
 export const CLAIM_STUCK_MS = 60 * 1000;
+// Mid-turn stall window — "the container claimed a message, made some
+// progress, then went silent." CLAIM_STUCK_MS cannot catch this: it requires
+// heartbeat_mtime <= claimed_at, which stops being true the moment any SDK
+// event fires. So a turn that stalls after doing work was only ever caught by
+// ABSOLUTE_CEILING_MS, 30 minutes later.
+//
+// Sized against real compaction latency: auto-compaction emits no SDK events
+// while it runs and measured 17s–180s (median ~150s) on this deployment, so
+// the heartbeat legitimately goes stale for ~3 minutes. 10 minutes leaves a
+// ~3x margin over the worst observed compaction while cutting recovery from a
+// genuine stall from 30 minutes to 10. A long-running Bash widens it as usual.
+export const STALL_MS = Number(process.env.CONTAINER_STALL_MS) || 10 * 60 * 1000;
 const MAX_TRIES = 5;
 const BACKOFF_BASE_MS = 5000;
 
 export type StuckDecision =
   | { action: 'ok' }
   | { action: 'kill-ceiling'; heartbeatAgeMs: number; ceilingMs: number }
+  | { action: 'kill-stall'; messageId: string; heartbeatAgeMs: number; toleranceMs: number }
   | { action: 'kill-claim'; messageId: string; claimAgeMs: number; toleranceMs: number };
 
 /**
@@ -102,6 +115,22 @@ export function decideStuckAction(args: {
     const ceiling = Math.max(ABSOLUTE_CEILING_MS, declaredBashMs ?? 0);
     if (heartbeatAge > ceiling) {
       return { action: 'kill-ceiling', heartbeatAgeMs: heartbeatAge, ceilingMs: ceiling };
+    }
+  }
+
+  // Mid-turn stall: a message is still claimed but the container has emitted
+  // no SDK event for STALL_MS. Unlike the claim check below, this does not
+  // care when the message was claimed — only how long we've been silent.
+  if (heartbeatMtimeMs !== 0 && claims.length > 0) {
+    const stallTolerance = Math.max(STALL_MS, declaredBashMs ?? 0);
+    const heartbeatAge = now - heartbeatMtimeMs;
+    if (heartbeatAge > stallTolerance) {
+      return {
+        action: 'kill-stall',
+        messageId: claims[0].message_id,
+        heartbeatAgeMs: heartbeatAge,
+        toleranceMs: stallTolerance,
+      };
     }
   }
 
@@ -136,7 +165,14 @@ async function sweep(): Promise<void> {
   try {
     const sessions = getActiveSessions();
     for (const session of sessions) {
-      await sweepSession(session);
+      // Per-session isolation: a throw here used to escape to the outer catch and
+      // abort the whole loop, so every session ordered after the failing one was
+      // skipped on every tick — no wake, no stall kill, no recurrence fanout.
+      try {
+        await sweepSession(session);
+      } catch (err) {
+        log.error('Host sweep error', { sessionId: session.id, err });
+      }
     }
   } catch (err) {
     log.error('Host sweep error', { err });
@@ -168,8 +204,9 @@ async function sweepSession(session: Session): Promise<void> {
 
   try {
     // 1. Sync processing_ack → messages_in status
+    let retryAcks: string[] = [];
     if (outDb) {
-      syncProcessingAcks(inDb, outDb);
+      retryAcks = syncProcessingAcks(inDb, outDb);
     }
 
     // 2. Wake a container if work is due and nothing is running. Ordered
@@ -187,6 +224,12 @@ async function sweepSession(session: Session): Promise<void> {
     }
 
     const alive = isContainerRunning(session.id);
+
+    // 1b. Clear any 'retry' acks now that the reschedule is recorded in inbound.db.
+    // Deferred to here because outbound.db has exactly one writer and the container
+    // owns it while alive (see docs/db.md). A still-running container keeps its acks
+    // one more tick; the message is already scheduled with backoff, so nothing is lost.
+    if (!alive && retryAcks.length > 0) clearRetryAcks(session, retryAcks);
 
     // 3a. Proactively refresh OAuth credentials — always, not just when a
     // container is alive. This ensures credentials are fresh before the next
@@ -258,6 +301,18 @@ function enforceRunningContainerSla(
     });
     killContainer(session.id, 'absolute-ceiling');
     resetStuckProcessingRows(inDb, outDb, session, 'absolute-ceiling');
+    return;
+  }
+
+  if (decision.action === 'kill-stall') {
+    log.warn('Killing container — mid-turn stall (no SDK events)', {
+      sessionId: session.id,
+      messageId: decision.messageId,
+      heartbeatAgeMs: decision.heartbeatAgeMs,
+      toleranceMs: decision.toleranceMs,
+    });
+    killContainer(session.id, 'mid-turn-stall');
+    resetStuckProcessingRows(inDb, outDb, session, 'mid-turn-stall');
     return;
   }
 
@@ -334,5 +389,27 @@ function resetStuckProcessingRows(
     log.warn('Failed to clear orphan processing claims', { sessionId: session.id, err });
   } finally {
     if (ownsDb) useDb?.close();
+  }
+}
+
+/**
+ * Delete 'retry' processing_ack rows through a short-lived writable handle.
+ * The container skips any message carrying an ack, so leaving these behind makes
+ * the reschedule unreachable. Failure is logged and swallowed: clearing an ack is
+ * never worth aborting a sweep over.
+ */
+function clearRetryAcks(session: Session, messageIds: string[]): void {
+  let db: Database.Database | null = null;
+  try {
+    db = openOutboundDbRw(session.agent_group_id, session.id);
+    const del = db.prepare('DELETE FROM processing_ack WHERE message_id = ? AND status = ?');
+    db.transaction(() => {
+      for (const id of messageIds) del.run(id, 'retry');
+    })();
+    log.info('Cleared retry acks', { sessionId: session.id, count: messageIds.length });
+  } catch (err) {
+    log.warn('Failed to clear retry acks', { sessionId: session.id, err });
+  } finally {
+    db?.close();
   }
 }

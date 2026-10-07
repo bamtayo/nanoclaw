@@ -1,5 +1,5 @@
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
-import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
+import { getPendingMessages, markProcessing, markCompleted, markRetry, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import {
@@ -197,9 +197,19 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
+    // Scheduled-task isolation: a batch of only task-kind messages runs in a
+    // FRESH context, not the accumulating chat continuation, and its follow-ups
+    // are not stacked into the same query (see processQuery `isolated`). Tasks
+    // are stateless by design (they re-read their sources every run), so they
+    // lose nothing — and this stops the failure mode where several tasks firing
+    // within an hour pile into one query until it overflows the context window.
+    // Interactive chat (any non-task message in the batch) keeps continuity.
+    const isolatedTask = keep.every((m) => m.kind === 'task');
+    if (isolatedTask) log(`Isolated task turn — fresh context (${keep.length} task[s])`);
+
     const query = config.provider.query({
       prompt,
-      continuation,
+      continuation: isolatedTask ? undefined : continuation,
       cwd: config.cwd,
       systemContext: config.systemContext,
       model: activeModel,
@@ -208,15 +218,44 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Process the query while concurrently polling for new messages
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
+    // Populated when the turn failed outright — either processQuery reported a
+    // stream that ended without a result, or the await itself threw.
+    let thrown: { retryable: boolean; message: string } | undefined;
     try {
-      const result = await processQuery(query, routing, processingIds, config.providerName);
-      if (result.continuation && result.continuation !== continuation) {
+      const result = await processQuery(query, routing, processingIds, config.providerName, isolatedTask);
+      thrown = result.failure;
+      if (isolatedTask) {
+        // The task ran in a fresh context that we never persist, so the shared
+        // chat continuation is untouched. Overflow here would mean a single
+        // task is too big on its own (very unlikely) — log it, but there is no
+        // stored continuation to clear and no user awaiting a reply.
+        if (result.contextOverflow) log('Isolated task overflowed its own fresh context — check that task for bloat');
+      } else if (result.contextOverflow) {
+        // The resumed chat transcript outgrew the model's context window. Drop
+        // it so the next message starts fresh instead of failing the same way
+        // until the nightly clear. The current turn's work is already lost —
+        // this only prevents the wedge from persisting.
+        log(`Context overflow — clearing continuation (${continuation ?? 'none'}) so the next turn starts fresh`);
+        continuation = undefined;
+        clearContinuation(config.providerName);
+        writeMessageOut({
+          id: generateId(),
+          kind: 'chat',
+          platform_id: routing.platformId,
+          channel_type: routing.channelType,
+          thread_id: routing.threadId,
+          content: JSON.stringify({
+            text: 'My session grew too large and I had to reset it. Please resend your last request — earlier context in this thread is cleared.',
+          }),
+        });
+      } else if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Query error: ${errMsg}`);
+      thrown = { retryable: isRetryableFailure(err), message: errMsg };
 
       // Stale/corrupt continuation recovery: ask the provider whether
       // this error means the stored continuation is unusable, and clear
@@ -227,21 +266,34 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         clearContinuation(config.providerName);
       }
 
-      // Write error response so the user knows something went wrong
-      writeMessageOut({
-        id: generateId(),
-        kind: 'chat',
-        platform_id: routing.platformId,
-        channel_type: routing.channelType,
-        thread_id: routing.threadId,
-        content: JSON.stringify({ text: `Error: ${errMsg}` }),
-      });
+      // Tell the user something went wrong — but NOT for a failure we are about to
+      // retry, or every blip in a multi-hour outage posts noise into the space. If
+      // the retries are exhausted the host marks the row failed and logs it.
+      if (!thrown.retryable) {
+        writeMessageOut({
+          id: generateId(),
+          kind: 'chat',
+          platform_id: routing.platformId,
+          channel_type: routing.channelType,
+          thread_id: routing.threadId,
+          content: JSON.stringify({ text: `Error: ${errMsg}` }),
+        });
+      }
     }
 
-    // Ensure completed even if processQuery ended without a result event
-    // (e.g. stream closed unexpectedly).
-    markCompleted(processingIds);
-    log(`Completed ${ids.length} message(s)`);
+    // A turn that never reached the model must NOT complete: completing it lets the
+    // host advance the recurrence and the occurrence is gone for good (2026-09-01).
+    // Hand it back instead — the host reschedules with a connectivity backoff and a
+    // later container picks it up as soon as the API answers again.
+    if (thrown?.retryable) {
+      markRetry(processingIds);
+      log(`Retryable failure — ${processingIds.length} message(s) handed back for a later attempt: ${thrown.message}`);
+    } else {
+      // Ensure completed even if processQuery ended without a result event
+      // (e.g. stream closed unexpectedly).
+      markCompleted(processingIds);
+      log(`Completed ${ids.length} message(s)`);
+    }
   }
 }
 
@@ -279,17 +331,43 @@ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommand
   return parts.join('\n\n');
 }
 
+import { isRetryableFailure } from './retryable.js';
+
 interface QueryResult {
+  /**
+   * Set when the turn ended WITHOUT a result event because the request never got
+   * through. `retryable` decides whether the messages go back on the queue or are
+   * allowed to complete; see retryable.ts.
+   */
+  failure?: { retryable: boolean; message: string };
   continuation?: string;
+  /** The turn ended because the resumed context no longer fits the model. */
+  contextOverflow?: boolean;
 }
 
-async function processQuery(
+/**
+ * A resumed session whose transcript has grown past the model's context window
+ * fails every turn with this, surfaced as a result (not a thrown error), so the
+ * provider's isSessionInvalid path never sees it. Left alone it wedges the
+ * session until the next manual/nightly clear — every task in between fails.
+ * Detecting it lets us drop the continuation and start the next turn fresh.
+ */
+export function isContextOverflowResult(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /^\s*(prompt is too long|input is too long|the request exceeds the .*context)/i.test(text);
+}
+
+export async function processQuery(
   query: AgentQuery,
   routing: RoutingContext,
   initialBatchIds: string[],
   providerName: string,
+  isolated = false,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
+  let contextOverflow = false;
+  let sawResult = false;
+  let lastError: { retryable: boolean; message: string } | undefined;
   let done = false;
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
@@ -304,7 +382,9 @@ async function processQuery(
   let pollInFlight = false;
   let endedForCommand = false;
   const pollHandle = setInterval(() => {
-    if (done || pollInFlight || endedForCommand) return;
+    // Isolated task turns never absorb follow-ups — that stacking is exactly
+    // what overflows the context. New messages wait and run as their own turn.
+    if (done || pollInFlight || endedForCommand || isolated) return;
     pollInFlight = true;
 
     void (async () => {
@@ -384,6 +464,12 @@ async function processQuery(
       handleEvent(event, routing);
       touchHeartbeat();
 
+      // Remember the last transport error so that if the stream ends without ever
+      // producing a result, we can tell a dead connection from a quiet turn.
+      if (event.type === 'error') {
+        lastError = { retryable: event.retryable, message: event.message };
+      }
+
       if (event.type === 'init') {
         queryContinuation = event.continuation;
         // Persist immediately so a mid-turn container crash still lets the
@@ -392,8 +478,15 @@ async function processQuery(
         // container died between `init` and `result`, the SDK session was
         // effectively orphaned and the next message started a blank
         // Claude session with no prior context.
-        setContinuation(providerName, event.continuation);
+        //
+        // Isolated task turns are the exception: they must NEVER be resumed
+        // (that's the whole point — each task starts fresh), so persisting
+        // their session id would both leak it into the shared chat
+        // continuation and risk resuming a task turn. A crashed isolated task
+        // simply re-runs fresh, which is correct.
+        if (!isolated) setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
+        sawResult = true;
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
         // stale 'processing' claims while the query stays open for
@@ -401,8 +494,22 @@ async function processQuery(
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
-        if (event.text) {
+        if (isContextOverflowResult(event.text)) {
+          // Don't dispatch "Prompt is too long" as if it were the agent's
+          // answer — it's an infrastructure failure. Flag it so the outer
+          // loop clears the continuation before the next turn.
+          contextOverflow = true;
+          log('Context overflow on resume — flagging continuation for reset');
+        } else if (event.text) {
           dispatchResultText(event.text, routing);
+        }
+        // An isolated task turn ends at its genuine end-of-turn result (not an
+        // intermediate "Context compacted" pseudo-result, which omits `final`).
+        // Ending the stream returns control to the loop so the next task opens
+        // a fresh query instead of stacking into this one.
+        if (isolated && event.final) {
+          done = true;
+          query.end();
         }
       }
     }
@@ -411,7 +518,13 @@ async function processQuery(
     clearInterval(pollHandle);
   }
 
-  return { continuation: queryContinuation };
+  // No result event means the turn produced nothing. If the last thing we saw was a
+  // transport error, say so — the caller decides whether to requeue or complete.
+  const failure =
+    !sawResult && lastError
+      ? { retryable: lastError.retryable || isRetryableFailure(lastError.message), message: lastError.message }
+      : undefined;
+  return { continuation: queryContinuation, contextOverflow, failure };
 }
 
 function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {

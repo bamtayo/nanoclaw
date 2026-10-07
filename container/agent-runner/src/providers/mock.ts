@@ -32,13 +32,13 @@ export class MockProvider implements AgentProvider {
 
         // Process initial prompt
         yield { type: 'activity' };
-        yield { type: 'result', text: responseFactory(input.prompt) };
+        yield { type: 'result', text: responseFactory(input.prompt), final: true };
 
         // Process any pushed follow-ups
         while (!ended && !aborted) {
           if (pending.length > 0) {
             const msg = pending.shift()!;
-            yield { type: 'result', text: responseFactory(msg) };
+            yield { type: 'result', text: responseFactory(msg), final: true };
             continue;
           }
           // Wait for push() or end()
@@ -51,7 +51,7 @@ export class MockProvider implements AgentProvider {
         // Drain remaining
         while (pending.length > 0) {
           const msg = pending.shift()!;
-          yield { type: 'result', text: responseFactory(msg) };
+          yield { type: 'result', text: responseFactory(msg), final: true };
         }
       },
     };

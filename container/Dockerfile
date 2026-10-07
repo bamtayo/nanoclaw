@@ -102,6 +102,13 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
     echo "network-timeout=300000" >> /root/.npmrc && \
     pnpm install -g "vercel@${VERCEL_VERSION}"
 
+# Pinned here (not in the top ARG block) so bumping the OpenCode version only
+# invalidates this layer onward — not the expensive apt/system-deps layers above.
+ARG OPENCODE_VERSION=1.4.17
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    echo "only-built-dependencies[]=opencode-ai" >> /root/.npmrc && \
+    pnpm install -g "opencode-ai@${OPENCODE_VERSION}"
+
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "agent-browser@${AGENT_BROWSER_VERSION}"
 

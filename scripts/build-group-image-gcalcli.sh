@@ -66,15 +66,18 @@ ENV XDG_DATA_HOME=/workspace/extra/.local/share
 # Lets the work-account gmail-work MCP show Adetayo's display name without
 # affecting the personal Gmail MCP. start-gmail-mcp-work.sh sets the env
 # var; personal MCP doesn't, so its behavior is unchanged.
-RUN GMAIL_UTL=$(readlink -f /pnpm/global/v11/7-19e0d729bae/node_modules/@gongrzhe/server-gmail-autoauth-mcp)/dist/utl.js && \
-    grep -q "'From: me'" "$GMAIL_UTL" && \
+# Path-glob find since the pnpm content-addressed hash drifts across rebuilds
+# (mirrors the Cc/Bcc patch below — a hardcoded /pnpm/global/v11/<hash> path
+# breaks whenever the base image's pnpm store changes).
+RUN GMAIL_UTL=$(find /pnpm/store -type f -path "*@gongrzhe/server-gmail-autoauth-mcp/dist/utl.js" | head -1) && \
+    [ -n "$GMAIL_UTL" ] && grep -q "'From: me'" "$GMAIL_UTL" && \
     sed -i "s#'From: me'#\`From: \${process.env.GMAIL_FROM_HEADER || 'me'}\`#" "$GMAIL_UTL"
 
 # Patch read_email to also surface Cc/Bcc headers (v1.1.11 only returns
 # Subject/From/To/Date — Cc disappears from the agent's view of every email).
 # Path-glob find since the pnpm content-addressed hash drifts across rebuilds.
 COPY patch-gmail-cc.js /tmp/patch-gmail-cc.js
-RUN GMAIL_INDEX=$(find /pnpm/global -type f -path "*@gongrzhe/server-gmail-autoauth-mcp/dist/index.js" | head -1) && \
+RUN GMAIL_INDEX=$(find /pnpm/store -type f -path "*@gongrzhe/server-gmail-autoauth-mcp/dist/index.js" | head -1) && \
     [ -n "$GMAIL_INDEX" ] && node /tmp/patch-gmail-cc.js "$GMAIL_INDEX" && \
     rm /tmp/patch-gmail-cc.js
 

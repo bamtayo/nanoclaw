@@ -105,6 +105,30 @@ const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const GROUP_METADATA_CACHE_TTL_MS = 60_000; // 1 min for outbound sends
 const SENT_MESSAGE_CACHE_MAX = 256;
 const RECONNECT_DELAY_MS = 5000;
+
+/**
+ * Disconnect reasons that must NEVER be auto-retried.
+ *
+ * Reconnecting into one of these is what turns a recoverable problem into an account-level one.
+ * On 2026-07-31 a WhatsApp Web login on the Zion number (Baileys is itself a web client, so that
+ * made two) got the account flagged. Every socket then closed with 403, the old
+ * `reason !== loggedOut` test said "reconnect", and it retried 440 times in 26 minutes — hammering
+ * WhatsApp while a ban review was open. The retry storm was more incriminating than the original
+ * mistake.
+ *
+ * A terminal reason means a human has to act. Backing off is not enough; we stop entirely.
+ */
+const TERMINAL_DISCONNECT_REASONS = new Map<number, string>([
+  [401, 'loggedOut — this device was unlinked'],
+  [403, 'forbidden — account flagged or banned by WhatsApp'],
+  [411, 'multideviceMismatch — re-pair required'],
+  [440, 'connectionReplaced — another client took over this session'],
+]);
+
+/** Backoff for genuinely transient closes (408 timedOut, 428 connectionClosed, 515 restartRequired). */
+const RECONNECT_BACKOFF_S = [5, 10, 30, 60, 120, 300];
+/** Even transient closes stop eventually — a tight loop is a red flag regardless of its cause. */
+const MAX_CONSECUTIVE_RECONNECTS = 20;
 const PENDING_QUESTIONS_MAX = 64;
 
 /** Normalize an option label to a slash command: "Approve" → "/approve" */
@@ -198,6 +222,8 @@ registerChannelAdapter('whatsapp', {
     // State
     let sock: WASocket;
     let connected = false;
+    // Reset on every successful open; drives RECONNECT_BACKOFF_S and MAX_CONSECUTIVE_RECONNECTS.
+    let consecutiveReconnects = 0;
     let setupConfig: ChannelSetup;
 
     // LID → phone JID mapping (WhatsApp's new ID system)
@@ -503,30 +529,51 @@ registerChannelAdapter('whatsapp', {
         if (connection === 'close') {
           connected = false;
           const reason = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
-          const shouldReconnect = reason !== DisconnectReason.loggedOut;
+          const terminalReason = reason !== undefined ? TERMINAL_DISCONNECT_REASONS.get(reason) : undefined;
+          const exhausted = consecutiveReconnects >= MAX_CONSECUTIVE_RECONNECTS;
+          const shouldReconnect = !terminalReason && !exhausted;
 
           log.info('WhatsApp connection closed', { reason, shouldReconnect });
 
-          if (shouldReconnect) {
-            log.info('Reconnecting...');
-            connectSocket().catch((err) => {
-              log.error('Failed to reconnect, retrying in 5s', { err });
-              setTimeout(() => {
-                connectSocket().catch((err2) => {
-                  log.error('Reconnection retry failed', { err: err2 });
-                });
-              }, RECONNECT_DELAY_MS);
+          if (terminalReason) {
+            // Deliberately loud and final. Retrying here is what gets an account banned rather
+            // than merely flagged — see TERMINAL_DISCONNECT_REASONS.
+            log.error('WhatsApp will NOT reconnect — terminal disconnect, human action required', {
+              reason,
+              meaning: terminalReason,
+              action: 'Do not re-link or re-scan the QR while a review is open. Investigate first.',
+            });
+          } else if (exhausted) {
+            log.error('WhatsApp will NOT reconnect — too many consecutive attempts', {
+              reason,
+              consecutiveReconnects,
+              action: 'Restart the service once the underlying problem is understood.',
             });
           } else {
-            log.info('WhatsApp logged out');
-            if (rejectFirstOpen) {
-              rejectFirstOpen(new Error('WhatsApp logged out'));
-              rejectFirstOpen = undefined;
-              resolveFirstOpen = undefined;
-            }
+            const delayS = RECONNECT_BACKOFF_S[Math.min(consecutiveReconnects, RECONNECT_BACKOFF_S.length - 1)];
+            consecutiveReconnects += 1;
+            log.info('Reconnecting with backoff', { attempt: consecutiveReconnects, delayS, reason });
+            setTimeout(() => {
+              connectSocket().catch((err) => {
+                log.error('Reconnection attempt failed', { err, attempt: consecutiveReconnects });
+              });
+            }, delayS * 1000);
+          }
+
+          if (!shouldReconnect && rejectFirstOpen) {
+            rejectFirstOpen(
+              new Error(
+                terminalReason
+                  ? `WhatsApp terminal disconnect: ${terminalReason}`
+                  : 'WhatsApp reconnect attempts exhausted',
+              ),
+            );
+            rejectFirstOpen = undefined;
+            resolveFirstOpen = undefined;
           }
         } else if (connection === 'open') {
           connected = true;
+          consecutiveReconnects = 0;
           log.info('Connected to WhatsApp');
 
           // Clean up pairing code file after successful connection

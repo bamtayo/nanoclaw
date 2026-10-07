@@ -105,6 +105,32 @@ export function wakeContainer(session: Session): Promise<boolean> {
   return promise;
 }
 
+const CONTAINER_LOG_DIR = 'logs/containers';
+const CONTAINER_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Open a per-container stderr log. Best-effort: a logging failure must never
+ * stop a container from starting, so every path here swallows and returns null.
+ */
+function openContainerLog(containerName: string): fs.WriteStream | null {
+  try {
+    fs.mkdirSync(CONTAINER_LOG_DIR, { recursive: true });
+    const cutoff = Date.now() - CONTAINER_LOG_RETENTION_MS;
+    for (const f of fs.readdirSync(CONTAINER_LOG_DIR)) {
+      const p = path.join(CONTAINER_LOG_DIR, f);
+      try {
+        if (fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, { force: true });
+      } catch {
+        /* another process may have removed it; ignore */
+      }
+    }
+    return fs.createWriteStream(path.join(CONTAINER_LOG_DIR, `${containerName}.log`), { flags: 'a' });
+  } catch (err) {
+    log.warn('could not open container log', { err, container: containerName });
+    return null;
+  }
+}
+
 async function spawnContainer(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) {
@@ -162,11 +188,21 @@ async function spawnContainer(session: Session): Promise<void> {
   activeContainers.set(session.id, { process: container, containerName });
   markContainerRunning(session.id);
 
-  // Log stderr
+  // Log stderr. Containers run with --rm, so once one exits its `docker logs`
+  // are gone; and log.debug is dropped unless LOG_LEVEL=debug. That left
+  // agent-runner failures with no evidence trail at all — a post-compaction
+  // stall on 2026-07-10 was undiagnosable for exactly this reason. Mirror
+  // stderr to a per-container file so a dead container can still be autopsied.
+  const containerLog = openContainerLog(containerName);
   container.stderr?.on('data', (data) => {
     for (const line of data.toString().trim().split('\n')) {
-      if (line) log.debug(line, { container: agentGroup.folder });
+      if (!line) continue;
+      log.debug(line, { container: agentGroup.folder });
+      containerLog?.write(`[${new Date().toISOString()}] ${line}\n`);
     }
+  });
+  container.on('exit', (code, signal) => {
+    containerLog?.end(`[${new Date().toISOString()}] --- container exited code=${code} signal=${signal} ---\n`);
   });
 
   // stdout is unused in v2 (all IO is via session DB)

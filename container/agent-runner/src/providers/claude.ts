@@ -4,6 +4,7 @@ import path from 'path';
 import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
+import { evaluateSend, pruneAttempts, type SendAttempt } from './bulk-send-guard.js';
 import { registerProvider } from './provider-registry.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
@@ -22,6 +23,11 @@ function log(msg: string): void {
 //   the question and blocks on the real reply.
 // - EnterPlanMode / ExitPlanMode / EnterWorktree / ExitWorktree: Claude
 //   Code UI affordances; in a headless container they'd appear stuck.
+// Sliding window of inline-HTML sends this container has permitted, for the
+// bulk-email rate limit. Module-level: one container serves many tasks, and the
+// window (bulk-send-guard.SEND_WINDOW_MS) spans them intentionally.
+let inlineHtmlSends: SendAttempt[] = [];
+
 const SDK_DISALLOWED_TOOLS = [
   'CronCreate',
   'CronDelete',
@@ -165,6 +171,17 @@ const preToolUseHook: HookCallback = async (input) => {
       decision: 'block',
       stopReason: `Tool '${toolName}' is not available in this environment — use the nanoclaw equivalent.`,
     } as unknown as ReturnType<HookCallback>;
+  }
+
+  // Structural bulk-email guard: block inline-HTML sends that would launder
+  // rendered email through the context window. See bulk-send-guard.ts.
+  const now = Date.now();
+  inlineHtmlSends = pruneAttempts(inlineHtmlSends, now);
+  const verdict = evaluateSend(toolName, i.tool_input, now, inlineHtmlSends);
+  if (verdict.record) inlineHtmlSends.push(now);
+  if (verdict.block) {
+    log(`Blocked inline-HTML send: ${verdict.reason}`);
+    return { decision: 'block', stopReason: verdict.reason } as unknown as ReturnType<HookCallback>;
   }
   // Bash exposes its timeout via the tool_input.timeout field (ms). Any other
   // tool: no declared timeout.
@@ -328,7 +345,7 @@ export class ClaudeProvider implements AgentProvider {
           yield { type: 'init', continuation: message.session_id };
         } else if (message.type === 'result') {
           const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
-          yield { type: 'result', text };
+          yield { type: 'result', text, final: true };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'rate_limit_event') {

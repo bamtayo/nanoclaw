@@ -78,7 +78,11 @@ export interface AgentQuery {
 
 export type ProviderEvent =
   | { type: 'init'; continuation: string }
-  | { type: 'result'; text: string | null }
+  // `final` marks the SDK's genuine end-of-turn result. Intermediate
+  // pseudo-results (e.g. a "Context compacted" notice) reuse `type: 'result'`
+  // for display but omit `final`, so a caller can tell a turn boundary from a
+  // mid-turn notice.
+  | { type: 'result'; text: string | null; final?: boolean }
   | { type: 'error'; message: string; retryable: boolean; classification?: string }
   | { type: 'progress'; message: string }
   /**

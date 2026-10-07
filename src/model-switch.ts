@@ -49,6 +49,8 @@ const PRESETS: Record<string, ModelTarget> = {
   // fine by the API (verified). Bump these when newer versions land.
   opus: { provider: 'claude', activeModel: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
   sonnet: { provider: 'claude', activeModel: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  sonnet5: { provider: 'claude', activeModel: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+  fable5: { provider: 'claude', activeModel: 'claude-fable-5', label: 'Claude Fable 5' },
   haiku: { provider: 'claude', activeModel: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
 };
 

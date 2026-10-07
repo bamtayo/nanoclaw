@@ -7,9 +7,59 @@ import { registerProvider } from './provider-registry.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 import { mcpServersToOpenCodeConfig } from './mcp-to-opencode.js';
 import { PROVIDER_CATALOG } from '../model-catalog.js';
+import { evaluateSend, pruneAttempts, type SendAttempt } from './bulk-send-guard.js';
 
 function log(msg: string): void {
   console.error(`[opencode-provider] ${msg}`);
+}
+
+// Bulk-email rate limit, mirrored from the claude provider (bulk-send-guard.ts +
+// providers/claude.ts). The opencode provider has no PreToolUse hook, so we
+// enforce the same guard at the permission-approval step instead. Module-level:
+// one shared runtime serves many tasks and the window spans them intentionally.
+//
+// SAFE-DEGRADE by design. The guard only ever *adds* a deny on a genuine 6th+
+// inline-HTML send inside the window. If the permission event doesn't expose the
+// tool args (so htmlBody can't be read), evaluateSend returns ALLOWED and nothing
+// is recorded — a silent no-op, never a false block. If the deny call itself
+// fails, we fall back to approving. So this can never hang a turn, never block a
+// non-send tool, and is never worse than today's behaviour.
+let inlineHtmlSends: SendAttempt[] = [];
+
+/**
+ * Best-effort extraction of a send_email tool call from a permission event's
+ * `Permission` properties. opencode carries tool args in `metadata`, but the
+ * exact nesting is not contractual, so we flatten the likely holders. Anything
+ * not clearly a send_email yields an empty toolName, which evaluateSend treats
+ * as ALLOWED.
+ */
+function extractSendCall(properties: unknown): {
+  toolName: string;
+  toolInput: Record<string, unknown> | undefined;
+} {
+  const p = (properties ?? {}) as {
+    type?: unknown;
+    title?: unknown;
+    pattern?: unknown;
+    metadata?: unknown;
+  };
+  const signature = [
+    typeof p.type === 'string' ? p.type : '',
+    typeof p.title === 'string' ? p.title : '',
+    Array.isArray(p.pattern) ? p.pattern.join(' ') : typeof p.pattern === 'string' ? p.pattern : '',
+  ].join(' ');
+  const toolName = /(^|[_\W])send_email\b/.test(signature)
+    ? 'send_email'
+    : typeof p.type === 'string'
+      ? p.type
+      : '';
+
+  const md = (p.metadata ?? {}) as Record<string, unknown>;
+  const holders = [md, md.input, md.arguments, md.args, md.params].filter(
+    (o): o is Record<string, unknown> => !!o && typeof o === 'object',
+  );
+  const toolInput = Object.assign({}, ...holders) as Record<string, unknown>;
+  return { toolName, toolInput };
 }
 
 const SESSION_STATUS_RETRY_ERROR_AFTER = 3;
@@ -408,13 +458,37 @@ export class OpenCodeProvider implements AgentProvider {
               case 'permission.updated': {
                 const perm = ev.properties as { id?: string; sessionID?: string };
                 if (perm.sessionID === sessionId && perm.id) {
-                  try {
-                    await client.postSessionIdPermissionsPermissionId({
-                      path: { id: sessionId, permissionID: perm.id },
-                      body: { response: 'always' },
-                    });
-                  } catch (err) {
-                    log(`Failed to auto-reply permission: ${err instanceof Error ? err.message : String(err)}`);
+                  // Bulk-send guard (safe-degrade — see inlineHtmlSends above).
+                  const now = Date.now();
+                  inlineHtmlSends = pruneAttempts(inlineHtmlSends, now);
+                  const { toolName, toolInput } = extractSendCall(ev.properties);
+                  const verdict = evaluateSend(toolName, toolInput, now, inlineHtmlSends);
+                  if (verdict.record) inlineHtmlSends.push(now);
+
+                  let handled = false;
+                  if (verdict.block) {
+                    try {
+                      await client.postSessionIdPermissionsPermissionId({
+                        path: { id: sessionId, permissionID: perm.id },
+                        body: { response: 'reject' },
+                      });
+                      handled = true;
+                      log(`Bulk-send guard: denied inline-HTML send. ${verdict.reason ?? ''}`);
+                    } catch (err) {
+                      // Unknown deny contract → fall through to approve; never hang.
+                      log(`Bulk-send guard: deny failed, approving instead: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }
+
+                  if (!handled) {
+                    try {
+                      await client.postSessionIdPermissionsPermissionId({
+                        path: { id: sessionId, permissionID: perm.id },
+                        body: { response: 'always' },
+                      });
+                    } catch (err) {
+                      log(`Failed to auto-reply permission: ${err instanceof Error ? err.message : String(err)}`);
+                    }
                   }
                 }
                 break;
@@ -466,7 +540,7 @@ export class OpenCodeProvider implements AgentProvider {
             resultText = partTextByMessageId.get(msgId) ?? resultText;
           }
         }
-        yield { type: 'result', text: resultText || null };
+        yield { type: 'result', text: resultText || null, final: true };
       }
     }
 

@@ -32,7 +32,7 @@ export const PROVIDER_CATALOG: Record<string, ProviderCatalogEntry> = {
   },
   anthropic: {
     baseURL: 'https://api.anthropic.com/v1',
-    models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    models: ['claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-fable-5', 'claude-haiku-4-5-20251001'],
     oauth: true,
   },
 };
@@ -49,6 +49,8 @@ export const MODEL_PRESETS: Record<string, ModelPreset> = {
   'deepseek-flash': { label: 'DeepSeek V4 Flash', model: 'deepseek/deepseek-v4-flash' },
   opus: { label: 'Claude Opus 4.8', model: 'anthropic/claude-opus-4-8' },
   sonnet: { label: 'Claude Sonnet 4.6', model: 'anthropic/claude-sonnet-4-6' },
+  sonnet5: { label: 'Claude Sonnet 5', model: 'anthropic/claude-sonnet-5' },
+  fable5: { label: 'Claude Fable 5', model: 'anthropic/claude-fable-5' },
   haiku: { label: 'Claude Haiku 4.5', model: 'anthropic/claude-haiku-4-5-20251001' },
 };
 

@@ -30,6 +30,23 @@ export interface AdditionalMountConfig {
   readonly?: boolean;
 }
 
+/**
+ * Per-group OpenCode model override (only consulted when provider === "opencode").
+ * Each field overrides the matching global host env var; unset fields fall back
+ * to the global value. This lets different agent groups run different OpenCode
+ * models (DeepSeek, Kimi, Qwen…) simultaneously.
+ */
+export interface OpenCodeGroupConfig {
+  /** OpenCode provider id (e.g. "deepseek", "moonshot", "openrouter"). Overrides OPENCODE_PROVIDER. */
+  provider?: string;
+  /** Full model id in `provider/model` form. Overrides OPENCODE_MODEL. */
+  model?: string;
+  /** Optional lighter model for auxiliary tasks. Overrides OPENCODE_SMALL_MODEL. */
+  smallModel?: string;
+  /** Provider API base URL. Overrides ANTHROPIC_BASE_URL. Set this whenever you override `provider`. */
+  baseURL?: string;
+}
+
 export interface ContainerConfig {
   mcpServers: Record<string, McpServerConfig>;
   packages: { apt: string[]; npm: string[] };
@@ -39,6 +56,8 @@ export interface ContainerConfig {
   skills: string[] | 'all';
   /** Agent provider name (e.g. "claude", "opencode"). Default: "claude". */
   provider?: string;
+  /** Per-group OpenCode model override (used when provider === "opencode"). */
+  opencode?: OpenCodeGroupConfig;
   /** Agent group display name (used in transcript archiving). */
   groupName?: string;
   /** Assistant display name (used in system prompt / responses). */
@@ -83,6 +102,7 @@ export function readContainerConfig(folder: string): ContainerConfig {
       additionalMounts: raw.additionalMounts ?? [],
       skills: raw.skills ?? 'all',
       provider: raw.provider,
+      opencode: raw.opencode,
       groupName: raw.groupName,
       assistantName: raw.assistantName,
       agentGroupId: raw.agentGroupId,

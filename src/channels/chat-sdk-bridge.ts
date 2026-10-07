@@ -500,7 +500,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     },
 
     async setTyping(platformId: string, threadId: string | null) {
-      const tid = threadId?.trim() ? threadId : platformId;   // blank == no thread (see deliver)
+      const tid = threadId?.trim() ? threadId : platformId; // blank == no thread (see deliver)
       await adapter.startTyping(tid);
     },
 

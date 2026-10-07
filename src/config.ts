@@ -6,9 +6,26 @@ import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from 
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER', 'ONECLI_URL', 'ONECLI_API_KEY', 'TZ']);
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'ONECLI_URL',
+  'ONECLI_API_KEY',
+  'TZ',
+  'DEFAULT_CHANNEL_AGENT',
+]);
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+
+// Default agent group for the unknown-channel registration card. When set to
+// an agent group id (`ag-…`) or name, the approval card sent to the owner leads
+// with a one-tap "Connect to <agent>" so new DMs/channels default to that agent
+// instead of forcing a pick. Empty = legacy behavior (choose-from-list).
+export const DEFAULT_CHANNEL_AGENT = (
+  process.env.DEFAULT_CHANNEL_AGENT ||
+  envConfig.DEFAULT_CHANNEL_AGENT ||
+  ''
+).trim();
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 
