@@ -191,9 +191,9 @@ export function syncProcessingAcks(inDb: Database.Database, outDb: Database.Data
   // Turns the container could not run at all (see container retryable.ts). These must
   // NOT become 'completed': a completed row with a recurrence is advanced by
   // handleRecurrence and the occurrence is lost. Reschedule and leave it pending.
-  const retrying = outDb
-    .prepare("SELECT message_id FROM processing_ack WHERE status = 'retry'")
-    .all() as Array<{ message_id: string }>;
+  const retrying = outDb.prepare("SELECT message_id FROM processing_ack WHERE status = 'retry'").all() as Array<{
+    message_id: string;
+  }>;
 
   if (completed.length === 0 && retrying.length === 0) return [];
 

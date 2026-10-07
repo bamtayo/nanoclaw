@@ -644,7 +644,10 @@ registerChannelAdapter('whatsapp', {
           stableTimer = setTimeout(() => {
             if (connected) consecutiveReconnects = 0;
           }, STABLE_CONNECTION_MS);
-          log.info('Connected to WhatsApp', { loginsLast24h: recentLogins(Date.now()).length, cap: MAX_LOGINS_PER_DAY });
+          log.info('Connected to WhatsApp', {
+            loginsLast24h: recentLogins(Date.now()).length,
+            cap: MAX_LOGINS_PER_DAY,
+          });
 
           // Clean up pairing code file after successful connection
           try {

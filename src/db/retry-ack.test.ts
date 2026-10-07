@@ -21,7 +21,9 @@ function addTask(inDb: Database.Database, id: string, tries = 0) {
 }
 const ack = (outDb: Database.Database, id: string, status: string) =>
   outDb
-    .prepare("INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, ?, datetime('now'))")
+    .prepare(
+      "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, ?, datetime('now'))",
+    )
     .run(id, status);
 const row = (inDb: Database.Database, id: string) =>
   inDb.prepare('SELECT status, tries, process_after FROM messages_in WHERE id = ?').get(id) as {
