@@ -143,8 +143,12 @@ async function main(): Promise<void> {
     ): Promise<string | undefined> {
       const adapter = getChannelAdapter(channelType);
       if (!adapter) {
+        // Throw, never return: returning made the caller log "Message delivered" and mark the
+        // row delivered. That hid a WhatsApp outage (403, adapter never loaded) for 15 days from
+        // 2026-09-22 — 41 messages "delivered" to nobody. Throwing sends it down the normal
+        // retry → markDeliveryFailed path, which the watchdog's DELIVERY_FAILED rule alerts on.
         log.warn('No adapter for channel type', { channelType });
-        return;
+        throw new Error(`No ${channelType} adapter loaded — channel is not connected`);
       }
       return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });
     },
