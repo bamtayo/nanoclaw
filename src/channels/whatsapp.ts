@@ -125,8 +125,27 @@ const TERMINAL_DISCONNECT_REASONS = new Map<number, string>([
   [440, 'connectionReplaced — another client took over this session'],
 ]);
 
-/** Backoff for genuinely transient closes (408 timedOut, 428 connectionClosed, 515 restartRequired). */
-const RECONNECT_BACKOFF_S = [5, 10, 30, 60, 120, 300];
+/**
+ * Backoff for genuinely transient closes (408 timedOut, 428 connectionClosed, 515 restartRequired).
+ *
+ * Every reconnect is a fresh login from an unofficial client, and login churn is an automation
+ * signal. In the 10 days before WhatsApp flagged the number on 2026-09-22 the flaky home link
+ * produced 6–14 logins a day (408/428/503 drops) because the old 5s floor reset on every open.
+ * So the floor is 30s, and the counter only resets once a connection has stayed up for
+ * STABLE_CONNECTION_MS — a link that drops every few minutes keeps backing off instead of
+ * hammering at 5s.
+ */
+const RECONNECT_BACKOFF_S = [30, 60, 120, 300, 600, 900];
+/** A connection must stay open this long before the backoff resets. */
+const STABLE_CONNECTION_MS = 10 * 60 * 1000;
+/**
+ * Hard cap on logins (every socket connect, restarts included) per rolling 24h. At the cap the
+ * adapter pauses until the oldest login ages out, then resumes on its own. Persisted to disk so a
+ * service restart can't reset it. Override with WA_MAX_LOGINS_PER_DAY.
+ */
+const MAX_LOGINS_PER_DAY = Number(process.env.WA_MAX_LOGINS_PER_DAY) || 8;
+const LOGIN_WINDOW_MS = 24 * 60 * 60 * 1000;
+const LOGIN_LOG_FILE = path.join(process.cwd(), 'store', 'wa-logins.json');
 /** Even transient closes stop eventually — a tight loop is a red flag regardless of its cause. */
 const MAX_CONSECUTIVE_RECONNECTS = 20;
 const PENDING_QUESTIONS_MAX = 64;
@@ -254,6 +273,10 @@ registerChannelAdapter('whatsapp', {
     // Group sync tracking
     let lastGroupSync = 0;
     let groupSyncTimerStarted = false;
+
+    // Clears consecutiveReconnects once a connection has been up for STABLE_CONNECTION_MS.
+    let stableTimer: ReturnType<typeof setTimeout> | undefined;
+    let capPauseTimer: ReturnType<typeof setTimeout> | undefined;
 
     // First-connect promise
     let resolveFirstOpen: (() => void) | undefined;
@@ -464,6 +487,47 @@ registerChannelAdapter('whatsapp', {
 
     // --- Socket creation ---
 
+    /** Logins in the last 24h, read from disk (restarts count too). */
+    function recentLogins(now: number): number[] {
+      try {
+        const all = JSON.parse(fs.readFileSync(LOGIN_LOG_FILE, 'utf8')) as number[];
+        return all.filter((t) => typeof t === 'number' && now - t < LOGIN_WINDOW_MS);
+      } catch {
+        return [];
+      }
+    }
+
+    /**
+     * The only way to open a socket. Enforces MAX_LOGINS_PER_DAY: at the cap it does not log in,
+     * schedules itself for when the oldest login leaves the window, and returns false.
+     */
+    async function gatedConnect(): Promise<boolean> {
+      const now = Date.now();
+      const recent = recentLogins(now);
+      if (recent.length >= MAX_LOGINS_PER_DAY) {
+        const waitMs = Math.min(...recent) + LOGIN_WINDOW_MS - now + 1000;
+        log.error('WhatsApp daily login cap reached — pausing instead of logging in again', {
+          loginsLast24h: recent.length,
+          cap: MAX_LOGINS_PER_DAY,
+          resumesAt: new Date(now + waitMs).toISOString(),
+          action: 'Repeated logins look like automation to WhatsApp. Sends fail (and alert) until it resumes.',
+        });
+        if (capPauseTimer) clearTimeout(capPauseTimer);
+        capPauseTimer = setTimeout(() => {
+          capPauseTimer = undefined;
+          gatedConnect().catch((err) => log.error('Deferred WhatsApp connect failed', { err }));
+        }, waitMs);
+        return false;
+      }
+      try {
+        fs.writeFileSync(LOGIN_LOG_FILE, JSON.stringify([...recent, now]));
+      } catch (err) {
+        log.warn('Could not record WhatsApp login', { err });
+      }
+      await connectSocket();
+      return true;
+    }
+
     async function connectSocket(): Promise<void> {
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
@@ -528,6 +592,8 @@ registerChannelAdapter('whatsapp', {
 
         if (connection === 'close') {
           connected = false;
+          if (stableTimer) clearTimeout(stableTimer);
+          stableTimer = undefined;
           const reason = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
           const terminalReason = reason !== undefined ? TERMINAL_DISCONNECT_REASONS.get(reason) : undefined;
           const exhausted = consecutiveReconnects >= MAX_CONSECUTIVE_RECONNECTS;
@@ -554,7 +620,7 @@ registerChannelAdapter('whatsapp', {
             consecutiveReconnects += 1;
             log.info('Reconnecting with backoff', { attempt: consecutiveReconnects, delayS, reason });
             setTimeout(() => {
-              connectSocket().catch((err) => {
+              gatedConnect().catch((err) => {
                 log.error('Reconnection attempt failed', { err, attempt: consecutiveReconnects });
               });
             }, delayS * 1000);
@@ -573,8 +639,12 @@ registerChannelAdapter('whatsapp', {
           }
         } else if (connection === 'open') {
           connected = true;
-          consecutiveReconnects = 0;
-          log.info('Connected to WhatsApp');
+          // Reset the backoff only once this connection proves stable (see RECONNECT_BACKOFF_S).
+          if (stableTimer) clearTimeout(stableTimer);
+          stableTimer = setTimeout(() => {
+            if (connected) consecutiveReconnects = 0;
+          }, STABLE_CONNECTION_MS);
+          log.info('Connected to WhatsApp', { loginsLast24h: recentLogins(Date.now()).length, cap: MAX_LOGINS_PER_DAY });
 
           // Clean up pairing code file after successful connection
           try {
@@ -756,7 +826,17 @@ registerChannelAdapter('whatsapp', {
         await new Promise<void>((resolve, reject) => {
           resolveFirstOpen = resolve;
           rejectFirstOpen = reject;
-          connectSocket().catch(reject);
+          gatedConnect()
+            .then((started) => {
+              // At the login cap: start the adapter disconnected rather than block host startup.
+              // gatedConnect has scheduled the real connect; sends fail and alert until then.
+              if (!started && resolveFirstOpen) {
+                resolveFirstOpen();
+                resolveFirstOpen = undefined;
+                rejectFirstOpen = undefined;
+              }
+            })
+            .catch(reject);
         });
 
         log.info('WhatsApp adapter initialized');
