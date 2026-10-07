@@ -128,7 +128,7 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
         "@piotr-agier/google-drive-mcp" \
         "gaxios@6.7.1" && \
     # Locate the real gaxios install in the pnpm store (cohort-independent).
-    GAXIOS_REAL=$(find /pnpm/store -maxdepth 10 -path '*/gaxios/package.json' -not -path '*/node_modules/gaxios/node_modules/*' -print -quit | xargs dirname) && \
+    GAXIOS_REAL=$(find /pnpm -maxdepth 12 -path '*gaxios@6.7.1*/node_modules/gaxios/package.json' -not -path '*/node_modules/gaxios/node_modules/*' -print -quit | xargs dirname) && \
     [ -n "$GAXIOS_REAL" ] && [ -d "$GAXIOS_REAL" ] && [ -f "$GAXIOS_REAL/package.json" ] && echo "gaxios real path: $GAXIOS_REAL" || (echo "FAILED to locate gaxios" && exit 1) && \
     # Link gaxios into both google-drive MCP packages so ESM resolution works.
     for SHIM_BIN in /pnpm/bin/mcp-google-drive /pnpm/bin/google-drive-mcp; do \
